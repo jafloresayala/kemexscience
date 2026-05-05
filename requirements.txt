@@ -1,0 +1,9 @@
+azure-ai-projects
+azure-identity
+openai
+requests
+pandas
+python-dotenv
+urllib3
+textual>=0.50.0
+matplotlib
