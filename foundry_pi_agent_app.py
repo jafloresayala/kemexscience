@@ -43,6 +43,12 @@ from openai.types.responses.response_input_param import (
 # =========================================================
 load_dotenv()
 
+# Eliminar variables de Azure SP vacías para que DefaultAzureCredential
+# no las vea y no intente ClientSecretCredential con valores inválidos.
+for _sp_var in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"):
+    if not (os.environ.get(_sp_var) or "").strip():
+        os.environ.pop(_sp_var, None)
+
 
 # =========================================================
 # PI WEB API - valores reales
