@@ -24,7 +24,8 @@ import json
 import urllib3
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 from typing import Any
 
 from dotenv import load_dotenv
@@ -70,9 +71,13 @@ API_TIMEOUT = 30
 # Límites de seguridad / control
 # =========================================================
 MAX_TAGS_PER_CALL = 20
-MAX_DAYS_PER_CALL = 7
+MAX_DAYS_PER_CALL = None  # Sin límite de días
 MAX_SEARCH_DEPTH = 3
 MAX_RETURN_ROWS = 500
+CHUNK_DAYS = 7          # Bloques internos para consultas grandes
+
+# Archivo buffer donde se guarda el último dataset completo
+_LAST_DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pi_last_data.json")
 MAX_TOOL_LOOPS = 5
 
 
@@ -99,7 +104,16 @@ def _post(url: str, payload: dict) -> dict | list:
         verify=VERIFY_SSL,
     )
 
-    response.raise_for_status()
+    if not response.ok:
+        # Intentar devolver el cuerpo del error como dict para que el agente lo procese
+        try:
+            body = response.json()
+        except Exception:
+            body = response.text[:500]
+        raise RuntimeError(
+            f"PI API HTTP {response.status_code}: {body}"
+        )
+
     return response.json()
 
 
@@ -254,28 +268,29 @@ def pi_fetch_element_attributes(element_path: str) -> str:
     normalized = []
 
     for item in rows:
+        pi_point = item.get("piPoint") or item.get("PiPoint") or item.get("pi_point")
         normalized.append(
             {
-                "id": item.get("id"),
-                "name": item.get("name"),
+                "attribute_name": item.get("name"),
+                "tag_name_for_pi_get_tag_values": pi_point,  # usar este valor en pi_get_tag_values
                 "path": item.get("path"),
                 "type": item.get("type"),
                 "description": item.get("description"),
-                "value": item.get("value"),
+                "current_value": item.get("value"),
                 "lastValueDate": item.get("lastValueDate"),
-                "configuration_string": item.get("configuration_string"),
-                "categories": item.get("categories"),
                 "UOM": item.get("UOM"),
-                "hasChildren": item.get("hasChildren"),
-                "isExcluded": item.get("isExcluded"),
-                "piPoint": item.get("piPoint"),
+                "piPoint": pi_point,
             }
         )
+
+    # Extraer solo los tag names disponibles para facilitar al agente
+    tag_names = [n["tag_name_for_pi_get_tag_values"] for n in normalized if n["tag_name_for_pi_get_tag_values"]]
 
     return _json_preview(
         {
             "query_path": safe_path,
             "count": len(normalized),
+            "available_tag_names": tag_names,  # pasar estos directamente a pi_get_tag_values
             "attributes": normalized[:MAX_RETURN_ROWS],
         }
     )
@@ -288,85 +303,65 @@ def pi_get_tag_values(
 ) -> str:
     """
     Obtiene valores históricos de uno o varios tags PI para un rango de fechas.
+    Divide automáticamente en bloques de 7 días para rangos grandes y consolida
+    todos los resultados. Guarda el dataset completo en _pi_last_data.json.
 
     :param tag_names: Lista de nombres de tags PI. Máximo 20 por llamada.
     :param from_datetime: Fecha inicio en formato YYYY-MM-DD HH:MM:SS.
     :param to_datetime: Fecha fin en formato YYYY-MM-DD HH:MM:SS.
-    :return: JSON con datos limpios y resumen por tag.
+    :return: JSON compacto con resumen + arrays de datos completos por tag.
     """
     if not tag_names:
-        return json.dumps(
-            {"error": "Debes enviar al menos un tag."},
-            ensure_ascii=False,
-        )
+        return json.dumps({"error": "Debes enviar al menos un tag."}, ensure_ascii=False)
 
     tag_names = [str(t).strip() for t in tag_names if str(t).strip()]
     tag_names = tag_names[:MAX_TAGS_PER_CALL]
 
     if not tag_names:
-        return json.dumps(
-            {"error": "La lista de tags viene vacía después de limpiar valores."},
-            ensure_ascii=False,
-        )
+        return json.dumps({"error": "La lista de tags viene vacía."}, ensure_ascii=False)
 
     from_dt = _parse_user_datetime(from_datetime)
-    to_dt = _parse_user_datetime(to_datetime)
+    to_dt   = _parse_user_datetime(to_datetime)
 
     if to_dt <= from_dt:
-        return json.dumps(
-            {"error": "to_datetime debe ser mayor que from_datetime."},
-            ensure_ascii=False,
-        )
+        return json.dumps({"error": "to_datetime debe ser mayor que from_datetime."}, ensure_ascii=False)
 
-    days = (to_dt - from_dt).total_seconds() / 86400
+    # ── Auto-chunking: divide el rango en bloques de CHUNK_DAYS ──────────────
+    tag_data: dict[str, dict] = defaultdict(lambda: {"timestamps": [], "values": []})
+    chunks_fetched = 0
+    chunk_errors = []
+    chunk_start = from_dt
 
-    if days > MAX_DAYS_PER_CALL:
-        return json.dumps(
-            {
-                "error": (
-                    f"Rango demasiado grande. "
-                    f"Máximo permitido: {MAX_DAYS_PER_CALL} días por llamada."
-                ),
-                "from_datetime": from_datetime,
-                "to_datetime": to_datetime,
-            },
-            ensure_ascii=False,
-        )
+    while chunk_start < to_dt:
+        chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), to_dt)
+        payload = {
+            "Plugin_Name": PLUGIN_NAME,
+            "From_Date": _format_pi_dt(chunk_start),
+            "To_Date": _format_pi_dt(chunk_end),
+            "Tag_Names": tag_names,
+        }
+        try:
+            data = _post(ENDPOINT_TAG_VALUES, payload)
+            rows = _ensure_list(data)
+            for tag_obj in rows:
+                tname = tag_obj.get("Tag_Name") or "unknown"
+                for point in tag_obj.get("Tag_Values", []) or []:
+                    ts  = point.get("TimeStamp")
+                    raw = point.get("Value")
+                    try:
+                        val = float(raw)
+                    except (TypeError, ValueError):
+                        val = raw
+                    tag_data[tname]["timestamps"].append(ts)
+                    tag_data[tname]["values"].append(val)
+            chunks_fetched += 1
+        except Exception as exc:
+            chunk_errors.append(str(exc))
+        chunk_start = chunk_end
 
-    payload = {
-        "Plugin_Name": PLUGIN_NAME,
-        "From_Date": _format_pi_dt(from_dt),
-        "To_Date": _format_pi_dt(to_dt),
-        "Tag_Names": tag_names,
-    }
+    total_records = sum(len(d["timestamps"]) for d in tag_data.values())
 
-    data = _post(ENDPOINT_TAG_VALUES, payload)
-    rows = _ensure_list(data)
-
-    records = []
-
-    for tag_obj in rows:
-        tag_name = tag_obj.get("Tag_Name")
-        tag_type = tag_obj.get("Tag_Type")
-        result = tag_obj.get("Result")
-        error_msg = tag_obj.get("ErrorMsg")
-
-        for point in tag_obj.get("Tag_Values", []) or []:
-            raw = point.get("Value")
-
-            records.append(
-                {
-                    "Tag_Name": tag_name,
-                    "Tag_Type": tag_type,
-                    "Result": result,
-                    "ErrorMsg": error_msg,
-                    "Value_Raw": raw,
-                    "Value_Str": "" if raw is None else str(raw),
-                    "TimeStamp": point.get("TimeStamp"),
-                }
-            )
-
-    if not records:
+    if total_records == 0:
         return json.dumps(
             {
                 "from_datetime": from_datetime,
@@ -374,38 +369,54 @@ def pi_get_tag_values(
                 "tags": tag_names,
                 "count": 0,
                 "message": "No se encontraron datos para el rango solicitado.",
+                "errors": chunk_errors,
             },
             ensure_ascii=False,
         )
 
-    df = pd.DataFrame(records)
-    df["Value_Num"] = pd.to_numeric(df["Value_Raw"], errors="coerce")
+    # ── Guardar dataset completo en archivo buffer ────────────────────────────
+    try:
+        with open(_LAST_DATA_FILE, "w", encoding="utf-8") as fh:
+            json.dump(
+                {"from": from_datetime, "to": to_datetime, "tags": dict(tag_data)},
+                fh,
+                ensure_ascii=False,
+                default=str,
+            )
+    except Exception:
+        pass
 
-    summary_df = (
-        df.dropna(subset=["Value_Num"])
-        .groupby("Tag_Name", as_index=False)
-        .agg(
-            Avg_Value=("Value_Num", "mean"),
-            Min_Value=("Value_Num", "min"),
-            Max_Value=("Value_Num", "max"),
-            Count_Readings=("Value_Num", "count"),
-        )
-    )
-
-    detail = df.head(MAX_RETURN_ROWS).to_dict(orient="records")
-    summary = summary_df.to_dict(orient="records")
-
-    return _json_preview(
-        {
-            "from_datetime": from_datetime,
-            "to_datetime": to_datetime,
-            "requested_tags": tag_names,
-            "total_records": len(records),
-            "returned_detail_records": len(detail),
-            "summary_by_tag": summary,
-            "detail_sample": detail,
+    # ── Resumen por tag ───────────────────────────────────────────────────────
+    summary: dict[str, dict] = {}
+    for tname, d in tag_data.items():
+        nums = [v for v in d["values"] if isinstance(v, (int, float))]
+        summary[tname] = {
+            "count": len(d["timestamps"]),
+            "avg":   round(sum(nums) / len(nums), 4) if nums else None,
+            "min":   round(min(nums), 4)             if nums else None,
+            "max":   round(max(nums), 4)             if nums else None,
         }
-    )
+
+    # ── Respuesta compacta al modelo ──────────────────────────────────────────
+    # Incluye arrays completos en formato compacto (mucho más pequeño que lista de dicts)
+    result = {
+        "from_datetime": from_datetime,
+        "to_datetime": to_datetime,
+        "total_records": total_records,
+        "chunks_fetched": chunks_fetched,
+        "summary_by_tag": summary,
+        "data": dict(tag_data),  # {tag: {timestamps: [...], values: [...]}}
+        "data_file": "_pi_last_data.json",
+        "graph_note": (
+            "Para graficar usa los arrays 'timestamps' y 'values' de 'data', "
+            "o carga el archivo _pi_last_data.json con: "
+            "import json; d=json.load(open('_pi_last_data.json'))"
+        ),
+    }
+    if chunk_errors:
+        result["chunk_errors"] = chunk_errors
+
+    return _json_preview(result, max_chars=80000)
 
 
 def pi_search_assets(
@@ -666,14 +677,33 @@ Tu raíz permitida de navegación AF es:
 {ROOT_PATH}
 
 Reglas:
-1. Cuando el usuario pregunte por activos, líneas, equipos o jerarquía, usa pi_fetch_child_elements o pi_search_assets.
-2. Si el usuario pregunta por la ruta raíz, llama pi_fetch_child_elements con element_path=null.
-3. Cuando el usuario pregunte por atributos de un elemento, usa pi_fetch_element_attributes.
-4. Cuando el usuario pregunte por valores históricos, tendencias, promedios, mínimos, máximos o comportamiento de tags, usa pi_get_tag_values.
-5. Si no sabes el nombre exacto de un tag, primero busca el activo o atributos relacionados.
+1. Cuando el usuario pregunte por una máquina, línea o activo y no conozcas la ruta exacta,
+   usa pi_search_assets para buscar en la API.
+2. Cuando el usuario pregunte por la jerarquía raíz, usa pi_fetch_child_elements con element_path=null.
+3. Para obtener los tags de un elemento, usa pi_fetch_element_attributes. La respuesta incluye
+   el campo 'available_tag_names' — esos son los nombres a usar en pi_get_tag_values.
+4. Flujo para obtener valores históricos de un equipo:
+   a) Si no tienes la ruta exacta: usa pi_search_assets o pi_fetch_child_elements para encontrarla.
+   b) Llama pi_fetch_element_attributes con esa ruta para obtener los tag names.
+   c) Usa los valores de 'available_tag_names' en pi_get_tag_values con el rango de fechas.
+   NUNCA inventes tag names. Sólo usa los que devuelve pi_fetch_element_attributes.
+5. Cuando el usuario pregunte por valores históricos, tendencias, promedios, mínimos, máximos
+   o comportamiento de tags y ya tienes el tag name, usa directamente pi_get_tag_values.
+5. Si el usuario pide una gráfica, genera código Python con matplotlib usando TODOS los datos
+   del campo 'data' de la respuesta de pi_get_tag_values.
+   - Usa estilo oscuro: plt.style.use('dark_background').
+   - Carga los datos así:
+       import json
+       d = json.load(open('_pi_last_data.json'))
+       tag = list(d['tags'].keys())[0]   # o el tag específico
+       timestamps = d['tags'][tag]['timestamps']
+       values     = d['tags'][tag]['values']
+   - Convierte timestamps a datetime: pd.to_datetime(timestamps)
+   - NUNCA uses solo un resumen o promedios para graficar. Usa TODOS los puntos.
 6. No inventes valores. Si la API no devuelve datos, dilo claramente.
-7. Para rangos grandes, divide la consulta o pide acotar fechas. La herramienta permite máximo {MAX_DAYS_PER_CALL} días por llamada.
-8. Resume los datos de forma clara: periodo consultado, tags, promedio, mínimo, máximo, cantidad de lecturas y hallazgos relevantes.
+7. Para rangos grandes pi_get_tag_values divide internamente en bloques de 7 días y
+   consolida TODO automáticamente. Haz UNA sola llamada con el rango completo.
+8. Resume los datos de forma clara: periodo, tags, promedio, mínimo, máximo, lecturas y hallazgos.
 """
 
 

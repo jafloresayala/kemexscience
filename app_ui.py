@@ -44,7 +44,7 @@ BANNER = [
     r"  ╚════██║██║     ██║██╔══╝  ██║╚██╗██║██║     ██╔══╝  ",
     r"  ███████║╚██████╗██║███████╗██║ ╚████║╚██████╗███████╗",
     r"  ╚══════╝ ╚═════╝╚═╝╚══════╝╚═╝  ╚═══╝ ╚═════╝╚══════╝",
-    r"     PI Web API  ·  Azure AI Foundry  ·  v1.0  ·  Powered by · Jose Alfredo",
+    r"     PI Web API  ·  Azure AI Foundry  ·  v1.0  ·  Powered by · JA",
 ]
 
 # ─── Textual CSS ──────────────────────────────────────────────────────────────
@@ -272,10 +272,10 @@ class PIAgentTUI(App):
             )
         )
         self.chat.write(Text("  Ejemplos:", style="dim"))
-        self.chat.write(Text("  • ¿Qué hijos hay bajo la ruta raíz?", style="dim white"))
-        self.chat.write(Text("  • Busca activos que contengan SPI en Plant 2", style="dim white"))
+        self.chat.write(Text("  • ¿Enumera las lineas de producción?", style="dim white"))
+        self.chat.write(Text("  • Dame los TAGS mas importantes de la Paste Printer en Linea 1 Left", style="dim white"))
         self.chat.write(
-            Text("  • Consulta TAG_001 del 2026-05-05 08:00 al 12:00 con promedios", style="dim white")
+            Text("  • Grafica los datos de la Paste Printer en Linea 1 Left del mes de mayo 2026", style="dim white")
         )
         self.chat.write(Text(""))
         self.user_input.focus()
