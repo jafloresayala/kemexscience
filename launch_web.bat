@@ -34,7 +34,62 @@ if not exist ".env" (
 )
 echo  [OK] Archivo .env encontrado.
 
+:: ── Verificar credenciales Azure (SP o az login) ────────────────────────────
+:: Lee las variables del .env para saber si usa Service Principal
+for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+    if "%%A"=="AZURE_TENANT_ID"     set ENV_TENANT=%%B
+    if "%%A"=="AZURE_CLIENT_ID"     set ENV_CLIENT=%%B
+    if "%%A"=="AZURE_CLIENT_SECRET" set ENV_SECRET=%%B
+)
+
+:: Limpia espacios
+set ENV_TENANT=%ENV_TENANT: =%
+set ENV_CLIENT=%ENV_CLIENT: =%
+set ENV_SECRET=%ENV_SECRET: =%
+
+if not "%ENV_TENANT%"=="" if not "%ENV_CLIENT%"=="" if not "%ENV_SECRET%"=="" (
+    echo  [OK] Credenciales Service Principal encontradas en .env.
+    goto :check_python_deps
+)
+
+:: No hay SP configurado - verificar Azure CLI
+echo  [INFO] No hay Service Principal en .env. Verificando Azure CLI...
+az --version >nul 2>&1
+if errorlevel 1 (
+    echo  Azure CLI no encontrado. Instalando...
+    winget install --id Microsoft.AzureCLI -e --silent
+    if errorlevel 1 (
+        echo  [AVISO] winget fallo. Descarga Azure CLI manualmente:
+        echo          https://aka.ms/installazurecliwindows
+        echo.
+        echo  O configura AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET en .env
+        pause
+        exit /b 1
+    )
+    echo  [OK] Azure CLI instalado. Reinicia el bat despues de instalar.
+    pause
+    exit /b 0
+)
+echo  [OK] Azure CLI detectado.
+
+:: Verificar si ya hay sesion activa
+az account show >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo  ============================================================
+    echo   Necesitas autenticarte con Azure. Se abrira el navegador.
+    echo  ============================================================
+    az login
+    if errorlevel 1 (
+        echo  [ERROR] az login fallo.
+        pause
+        exit /b 1
+    )
+)
+echo  [OK] Sesion Azure activa.
+
 :: ── Instalar dependencias Python ─────────────────────────────────────────────
+:check_python_deps
 echo  Verificando dependencias Python...
 %PYTHON_CMD% -c "import fastapi, uvicorn, azure.identity, openai, matplotlib" >nul 2>&1
 if errorlevel 1 (
