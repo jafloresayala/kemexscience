@@ -778,7 +778,10 @@ def create_project_client() -> AIProjectClient:
             client_secret=client_secret,
         )
     else:
-        credential = DefaultAzureCredential()
+        # Usar AzureCliCredential directamente para evitar que DefaultAzureCredential
+        # intente EnvironmentCredential con variables vacías y falle.
+        from azure.identity import AzureCliCredential
+        credential = AzureCliCredential()
 
     return AIProjectClient(
         endpoint=project_endpoint,
