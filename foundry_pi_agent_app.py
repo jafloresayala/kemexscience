@@ -748,13 +748,23 @@ def create_project_client() -> AIProjectClient:
             f"Valor actual: {project_endpoint}"
         )
 
-    # Si el .env tiene las 3 variables de Service Principal, usa ClientSecretCredential
-    # (no requiere az login). Si no, intenta DefaultAzureCredential (requiere az login).
-    tenant_id = os.getenv("AZURE_TENANT_ID")
-    client_id = os.getenv("AZURE_CLIENT_ID")
-    client_secret = os.getenv("AZURE_CLIENT_SECRET")
+    # Si el .env tiene las 3 variables de Service Principal con valores reales,
+    # usa ClientSecretCredential (no requiere az login).
+    # Si no, usa DefaultAzureCredential (requiere az login).
+    tenant_id     = (os.getenv("AZURE_TENANT_ID")     or "").strip()
+    client_id     = (os.getenv("AZURE_CLIENT_ID")     or "").strip()
+    client_secret = (os.getenv("AZURE_CLIENT_SECRET") or "").strip()
 
-    if tenant_id and client_id and client_secret:
+    # Valida que sean GUIDs reales (36 chars con guiones), no placeholders vacíos
+    import re
+    _guid_re = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+    use_sp = (
+        _guid_re.match(tenant_id or "") and
+        _guid_re.match(client_id or "") and
+        len(client_secret) > 0
+    )
+
+    if use_sp:
         from azure.identity import ClientSecretCredential
         credential = ClientSecretCredential(
             tenant_id=tenant_id,
