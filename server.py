@@ -190,10 +190,15 @@ def execute_code(req: ExecuteRequest) -> dict:
     )
 
     # Inyectar lógica de guardado de gráficas
-    preamble = f"_PI_PLOT_FILE = r'{plot_file}'\n"
+    # matplotlib.use('Agg') evita que el servidor intente abrir una ventana GUI
+    preamble = (
+        "import matplotlib\nmatplotlib.use('Agg')\n"
+        f"_PI_PLOT_FILE = r'{plot_file}'\n"
+    )
+    # Reemplazar plt.show() con savefig (sin plt.show() que bloquea en servidores sin display)
     code = req.code.replace(
         "plt.show()",
-        f"plt.savefig(r'{plot_file}', bbox_inches='tight', dpi=150, facecolor='#080c14')\nplt.show()",
+        f"plt.savefig(r'{plot_file}', bbox_inches='tight', dpi=150, facecolor='#080c14')",
     )
     # Si hay uso de plt pero sin plt.show(), guardar al final
     epilogue = (

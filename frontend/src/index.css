@@ -253,7 +253,69 @@ body {
   max-width: 720px;
   background: var(--bg);
 }
-.plot-img { display: block; width: 100%; height: auto; }
+.plot-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: zoom-in;
+  transition: opacity 0.15s;
+}
+.plot-img:hover { opacity: 0.88; }
+.plot-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border3);
+  background: var(--bg2);
+}
+.plot-btn {
+  background: transparent;
+  border: 1px solid var(--border3);
+  color: var(--cyan);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+.plot-btn:hover { background: var(--bg3); }
+
+/* ── Lightbox ─────────────────────────────────────────────────────── */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.lightbox-img {
+  max-width: 95vw;
+  max-height: 90vh;
+  border-radius: 4px;
+  box-shadow: 0 0 40px rgba(0,200,255,0.2);
+  cursor: default;
+  object-fit: contain;
+}
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  background: transparent;
+  border: 1px solid var(--border3);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 4px 14px;
+  cursor: pointer;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  z-index: 10000;
+}
+.lightbox-close:hover { background: rgba(255,255,255,0.08); }
 
 /* ── Input Zone (pet + input row) ─────────────────────────────────── */
 .input-zone {

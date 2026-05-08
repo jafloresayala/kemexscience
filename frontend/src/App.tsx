@@ -218,9 +218,11 @@ function MessageBody({ content }: { content: string }) {
 function MessageBubble({
   msg,
   onExecute,
+  onZoom,
 }: {
   msg: Message
   onExecute?: (code: string) => void
+  onZoom?: (url: string) => void
 }) {
   const lastCode = msg.role === 'agent' ? extractLastCode(msg.content) : null
 
@@ -239,7 +241,16 @@ function MessageBubble({
         <MessageBody content={msg.content} />
         {msg.plotUrl && (
           <div className="plot-container">
-            <img src={msg.plotUrl} alt="Gráfica generada" className="plot-img" />
+            <img
+              src={msg.plotUrl}
+              alt="Gráfica generada"
+              className="plot-img"
+              onClick={() => onZoom?.(msg.plotUrl!)}
+              title="Click para ampliar"
+            />
+            <div className="plot-actions">
+              <button className="plot-btn" onClick={() => onZoom?.(msg.plotUrl!)}>⤢ AMPLIAR</button>
+            </div>
           </div>
         )}
       </div>
@@ -298,6 +309,14 @@ export default function App() {
 
   const [toolsOpen, setToolsOpen] = useState(true)
   const [lightMode, setLightMode] = useState(false)
+  const [zoomedPlot, setZoomedPlot] = useState<string | null>(null)
+
+  // ── Escape key closes lightbox ────────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setZoomedPlot(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // ── Auto-scroll ────────────────────────────────────────────────────────────
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
@@ -378,6 +397,8 @@ export default function App() {
         body: JSON.stringify({ message: text }),
       })
 
+      let lastAnswerContent = ''
+
       for await (const ev of readSSE(res)) {
         const e = ev as { type: string; name?: string; preview?: string; content?: string }
 
@@ -391,6 +412,7 @@ export default function App() {
           }])
         } else if (e.type === 'answer') {
           const content = e.content ?? ''
+          lastAnswerContent = content
           setMessages(prev => {
             const exists = prev.find(m => m.id === agentId)
             if (exists) return prev.map(m => m.id === agentId ? { ...m, content } : m)
@@ -399,6 +421,12 @@ export default function App() {
         } else if (e.type === 'error') {
           setMessages(prev => [...prev, { id: uid(), role: 'error', content: e.content ?? 'Error desconocido', timestamp: now() }])
         }
+      }
+
+      // Auto-ejecutar código matplotlib sin requerir click manual
+      const codeToRun = extractLastCode(lastAnswerContent)
+      if (codeToRun && (codeToRun.includes('plt.') || codeToRun.includes('import matplotlib'))) {
+        await executeCode(codeToRun)
       }
     } catch (err) {
       setMessages(prev => [...prev, { id: uid(), role: 'error', content: String(err), timestamp: now() }])
@@ -502,6 +530,7 @@ export default function App() {
                 key={m.id}
                 msg={m}
                 onExecute={m.role === 'agent' ? executeCode : undefined}
+                onZoom={setZoomedPlot}
               />
             ))}
             <div ref={chatEndRef} />
@@ -548,6 +577,19 @@ export default function App() {
         </button>
         </div>
       </div>
+
+      {/* Lightbox */}
+      {zoomedPlot && (
+        <div className="lightbox" onClick={() => setZoomedPlot(null)}>
+          <button className="lightbox-close" onClick={e => { e.stopPropagation(); setZoomedPlot(null) }}>✕ CERRAR</button>
+          <img
+            src={zoomedPlot}
+            alt="Gráfica"
+            className="lightbox-img"
+            onClick={e => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   )
 }
