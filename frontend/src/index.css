@@ -227,116 +227,43 @@ body {
 .pi-crumb-item:hover { color: var(--cyan); }
 .pi-crumb-active { color: var(--cyan) !important; font-weight: 600; }
 
-/* Tree body with dot-grid */
-.pi-tree-body {
+/* SVG Node Graph body */
+.pi-graph-body {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 0 8px;
-  background-color: #06090f;
-  background-image:
-    radial-gradient(circle, rgba(0,200,255,0.07) 1px, transparent 1px);
-  background-size: 18px 18px;
+  overflow: auto;
+  background-color: #03070e;
+  background-image: radial-gradient(circle, rgba(0,200,255,0.055) 1px, transparent 1px);
+  background-size: 20px 20px;
   background-attachment: local;
-}
-
-/* Tree nodes */
-.tni-group { position: relative; }
-.tni {
   display: flex;
-  align-items: center;
-  padding: 3px 8px 3px 4px;
-  font-size: 11px;
-  cursor: default;
-  border-left: 2px solid transparent;
-  transition: background 0.12s, border-color 0.12s;
-  min-height: 22px;
-  white-space: nowrap;
-  user-select: none;
-  gap: 0;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6px 2px;
 }
-.tni:hover { background: rgba(0,200,255,0.05); }
 
-.tni-idle  { color: var(--dim); }
-.tni-done  { color: var(--text3); }
-.tni-done:hover { color: var(--text); }
-.tni-querying {
-  color: var(--yellow);
-  border-left-color: var(--yellow) !important;
-  background: rgba(255,183,0,0.06) !important;
+/* SVG animations */
+.svg-node-querying {
+  animation: svg-node-pulse 0.75s ease-in-out infinite;
 }
-.tni-root  { color: var(--cyan); font-weight: 700; }
-.tni-root.tni-done { color: var(--cyan); }
-
-/* Lit = hovered node and all its relatives */
-.tni-lit {
-  background: rgba(0,200,255,0.08) !important;
-  border-left-color: rgba(0,200,255,0.5) !important;
+@keyframes svg-node-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50%       { stroke-opacity: 0.35; }
 }
-.tni-lit .tni-name { color: var(--cyan); }
-
-.tni-indent {
-  font-family: 'JetBrains Mono', monospace;
-  color: rgba(0,200,255,0.22);
-  white-space: pre;
-  flex-shrink: 0;
-  font-size: 11px;
-  line-height: 1;
+.svg-pulse-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: svg-ring-expand 1.5s ease-out infinite;
 }
-.tni-icon {
-  flex-shrink: 0;
-  margin-right: 5px;
-  font-size: 12px;
-  line-height: 1;
+@keyframes svg-ring-expand {
+  0%   { transform: scale(1);   opacity: 0.55; }
+  100% { transform: scale(1.7); opacity: 0; }
 }
-.tni-icon-querying {
-  color: var(--yellow);
-  display: inline-block;
-  animation: tni-pulse 0.65s ease-in-out infinite;
+.svg-icon-querying {
+  animation: svg-icon-blink 0.65s ease-in-out infinite;
 }
-.tni-icon-done  { color: var(--green); }
-.tni-icon-idle  { color: var(--dim2); }
-@keyframes tni-pulse {
-  0%, 100% { transform: scale(1);   opacity: 1;   }
-  50%       { transform: scale(1.4); opacity: 0.55; }
-}
-.tni-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-}
-.tni-badge {
-  flex-shrink: 0;
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 2px;
-  letter-spacing: 0.06em;
-  margin-left: 5px;
-  font-weight: 600;
-}
-.tni-badge-querying {
-  color: var(--yellow);
-  background: rgba(255,183,0,0.12);
-  border: 1px solid rgba(255,183,0,0.35);
-  animation: badge-blink 0.7s ease-in-out infinite;
-}
-@keyframes badge-blink {
+@keyframes svg-icon-blink {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.35; }
-}
-.tni-badge-done {
-  color: var(--green);
-  background: rgba(0,255,65,0.07);
-  border: 1px solid rgba(0,255,65,0.2);
-}
-.tni-chevron {
-  flex-shrink: 0;
-  color: var(--dim);
-  font-size: 14px;
-  margin-left: 3px;
-  transition: color 0.12s;
+  50%       { opacity: 0.25; }
 }
 .tni:hover .tni-chevron { color: var(--cyan); }
 
@@ -402,14 +329,11 @@ body {
 }
 .pi-ev-ts { flex-shrink: 0; color: var(--dim2); font-size: 9px; }
 
-/* Light mode overrides for tree */
-.light .pi-tree-body {
-  background-color: #eef1f7;
-  background-image: radial-gradient(circle, rgba(0,100,180,0.08) 1px, transparent 1px);
+/* Light mode overrides for graph */
+.light .pi-graph-body {
+  background-color: #edf1f8;
+  background-image: radial-gradient(circle, rgba(0,100,180,0.07) 1px, transparent 1px);
 }
-.light .tni-indent { color: rgba(0,100,180,0.25); }
-.light .tni-lit { background: rgba(0,112,184,0.08) !important; border-left-color: rgba(0,112,184,0.4) !important; }
-.light .tni-lit .tni-name { color: var(--cyan); }
 .light .pi-empty-icon { color: rgba(0,112,184,0.2); }
 
 /* ── Messages ─────────────────────────────────────────────────────── */

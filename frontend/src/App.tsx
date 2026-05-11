@@ -342,57 +342,195 @@ function getRelatedIds(nodes: Map<string, AFNode>, targetId: string): Set<string
   return ids
 }
 
-// ─── Node Tree Item ───────────────────────────────────────────────────────────
-function NodeTreeItem({ nodeId, nodes, isLastStack, relatedIds, onHover, onFocus }: {
-  nodeId: string; nodes: Map<string, AFNode>; isLastStack: boolean[]
-  relatedIds: Set<string>; onHover: (id: string | null) => void; onFocus: (id: string) => void
+// ─── SVG Node Graph layout ────────────────────────────────────────────────────
+function countLeaves(id: string, nodes: Map<string, AFNode>): number {
+  const node = nodes.get(id)
+  if (!node || node.childIds.length === 0) return 1
+  return node.childIds.reduce((s, c) => s + countLeaves(c, nodes), 0)
+}
+
+function computeLayout(
+  rootId: string,
+  nodes: Map<string, AFNode>,
+  hGap = 84,
+  vGap = 88,
+): Map<string, { x: number; y: number }> {
+  const pos = new Map<string, { x: number; y: number }>()
+  function place(id: string, left: number, depth: number): number {
+    const node = nodes.get(id)
+    if (!node) return left + hGap
+    if (node.childIds.length === 0) {
+      pos.set(id, { x: left + hGap / 2, y: depth * vGap + 40 })
+      return left + hGap
+    }
+    const start = left
+    let cur = left
+    for (const cid of node.childIds) cur = place(cid, cur, depth + 1)
+    pos.set(id, { x: (start + cur) / 2, y: depth * vGap + 40 })
+    return cur
+  }
+  place(rootId, 0, 0)
+  return pos
+}
+
+function bezierEdge(x1: number, y1: number, x2: number, y2: number): string {
+  const cy = (y1 + y2) / 2
+  return `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`
+}
+
+// ─── PI Node Graph (SVG) ──────────────────────────────────────────────────────
+function PiNodeGraph({
+  nodes, focusedId, onFocus,
+}: {
+  nodes: Map<string, AFNode>
+  focusedId: string
+  onFocus: (id: string) => void
 }) {
-  const node = nodes.get(nodeId)
-  if (!node) return null
-  const depth = isLastStack.length
-  const isLast = depth === 0 || isLastStack[depth - 1]
-  const lit = relatedIds.has(nodeId)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
 
-  let indent = ''
-  for (let i = 0; i < depth - 1; i++) indent += isLastStack[i] ? '    ' : '│   '
-  if (depth > 0) indent += isLast ? '└── ' : '├── '
+  const positions = useMemo(
+    () => computeLayout(focusedId, nodes),
+    [focusedId, nodes],
+  )
 
-  const stateIcon = node.state === 'querying' ? '⬡'
-    : node.type === 'root' ? '◉'
-    : node.state === 'done' ? '◈' : '○'
+  const relatedIds = useMemo(
+    () => hoveredId ? getRelatedIds(nodes, hoveredId) : new Set<string>(),
+    [hoveredId, nodes],
+  )
 
-  const toolShort: Record<string, string> = {
-    pi_fetch_child_elements: 'CHILDREN',
-    pi_fetch_element_attributes: 'ATTRS',
-    pi_fetch_tag_values: 'VALUES',
-    pi_get_tag_snapshot: 'SNAP',
+  if (positions.size === 0) return null
+
+  const allPos = [...positions.values()]
+  const xs = allPos.map(p => p.x)
+  const ys = allPos.map(p => p.y)
+  const PAD = 52
+  const vx = Math.min(...xs) - PAD
+  const vy = Math.min(...ys) - PAD
+  const vw = Math.max(...xs) - vx + PAD
+  const vh = Math.max(...ys) - vy + PAD + 28
+
+  const stateCol = (n: AFNode, lit: boolean) => {
+    if (lit)                              return '#00c8ff'
+    if (n.state === 'querying')           return '#ffb700'
+    if (n.type === 'root')                return '#00c8ff'
+    if (n.state === 'done' && n.queryCount > 0) return '#00ff41'
+    return '#2a4060'
   }
 
   return (
-    <div className="tni-group">
-      <div
-        className={`tni tni-${node.state}${lit ? ' tni-lit' : ''}${node.type === 'root' ? ' tni-root' : ''}`}
-        style={node.childIds.length > 0 ? { cursor: 'pointer' } : undefined}
-        onMouseEnter={() => onHover(nodeId)}
-        onMouseLeave={() => onHover(null)}
-        onClick={() => node.childIds.length > 0 && onFocus(nodeId)}
-        title={`${node.path || 'PI Root'} · ${node.queryCount} consulta(s)`}
-      >
-        <span className="tni-indent">{indent}</span>
-        <span className={`tni-icon tni-icon-${node.state}`}>{stateIcon}</span>
-        <span className="tni-name">{node.name}</span>
-        {node.state === 'querying' && <span className="tni-badge tni-badge-querying">▶ QUERYING</span>}
-        {node.state === 'done' && node.queryCount > 0 && (
-          <span className="tni-badge tni-badge-done">{toolShort[node.toolName] ?? '✓'}</span>
-        )}
-        {node.childIds.length > 0 && node.state !== 'querying' && <span className="tni-chevron">›</span>}
-      </div>
-      {node.childIds.map((cid, i) => (
-        <NodeTreeItem key={cid} nodeId={cid} nodes={nodes}
-          isLastStack={[...isLastStack, i === node.childIds.length - 1]}
-          relatedIds={relatedIds} onHover={onHover} onFocus={onFocus} />
-      ))}
-    </div>
+    <svg
+      viewBox={`${vx} ${vy} ${vw} ${vh}`}
+      style={{ width: '100%', height: '100%', display: 'block', minHeight: 120 }}
+    >
+      <defs>
+        <filter id="glowC" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="glowY" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+
+      {/* ── Edges ── */}
+      {[...positions.entries()].flatMap(([id, p]) => {
+        const node = nodes.get(id)!
+        return node.childIds
+          .filter(cid => positions.has(cid))
+          .map(cid => {
+            const cp = positions.get(cid)!
+            const lit = relatedIds.has(id) && relatedIds.has(cid)
+            return (
+              <path
+                key={`e-${id}-${cid}`}
+                d={bezierEdge(p.x, p.y, cp.x, cp.y)}
+                fill="none"
+                stroke={lit ? '#00c8ff' : 'rgba(0,200,255,0.13)'}
+                strokeWidth={lit ? 1.8 : 0.9}
+                filter={lit ? 'url(#glowC)' : undefined}
+              />
+            )
+          })
+      })}
+
+      {/* ── Nodes ── */}
+      {[...positions.entries()].map(([id, p]) => {
+        const node = nodes.get(id)!
+        const lit = relatedIds.has(id)
+        const col = stateCol(node, lit)
+        const querying = node.state === 'querying'
+        const isRoot = node.type === 'root'
+        const R = isRoot ? 24 : 19
+        const canDrill = node.childIds.length > 0
+        const shortName = node.name.length > 13 ? node.name.slice(0, 12) + '…' : node.name
+
+        return (
+          <g
+            key={id}
+            transform={`translate(${p.x},${p.y})`}
+            style={{ cursor: canDrill ? 'pointer' : 'default' }}
+            onMouseEnter={() => setHoveredId(id)}
+            onMouseLeave={() => setHoveredId(null)}
+            onClick={() => canDrill && onFocus(id)}
+          >
+            {/* Expanding pulse ring for querying */}
+            {querying && (
+              <circle r={R + 9} fill="none" stroke="#ffb700" strokeWidth="1.2"
+                opacity="0.5" className="svg-pulse-ring" />
+            )}
+            {/* Glow halo when lit or querying */}
+            {(lit || querying) && (
+              <circle r={R + 5}
+                fill={querying ? 'rgba(255,183,0,0.07)' : 'rgba(0,200,255,0.07)'}
+                stroke={querying ? 'rgba(255,183,0,0.35)' : 'rgba(0,200,255,0.35)'}
+                strokeWidth="1"
+                filter={`url(#glow${querying ? 'Y' : 'C'})`}
+              />
+            )}
+            {/* Main circle */}
+            <circle
+              r={R}
+              fill={isRoot ? 'rgba(0,20,44,0.96)' : 'rgba(3,9,22,0.96)'}
+              stroke={col}
+              strokeWidth={lit || querying ? 2 : 1.2}
+              className={querying ? 'svg-node-querying' : ''}
+            />
+            {/* Inner decoration ring */}
+            <circle r={R - 5} fill="none" stroke={`${col}28`} strokeWidth="0.7" />
+            {/* State icon */}
+            <text textAnchor="middle" dominantBaseline="central"
+              fontSize={isRoot ? 13 : 10} fill={col} fontFamily="monospace"
+              className={querying ? 'svg-icon-querying' : ''}>
+              {isRoot ? '⬡' : querying ? '⬡' : node.state === 'done' && node.queryCount > 0 ? '◈' : '◦'}
+            </text>
+            {/* Label */}
+            <text y={R + 13} textAnchor="middle" fontSize="8.5"
+              fontFamily="'JetBrains Mono', monospace" letterSpacing="0.02em"
+              fill={lit ? '#00c8ff' : querying ? '#ffb700' : '#4a6880'}>
+              {shortName}
+            </text>
+            {/* Drill hint */}
+            {canDrill && (
+              <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
+                fill={lit ? 'rgba(0,200,255,0.65)' : 'rgba(0,200,255,0.22)'}>
+                {node.childIds.length} ›
+              </text>
+            )}
+            {/* Query count badge */}
+            {node.queryCount > 0 && !querying && (
+              <g transform={`translate(${R - 3},${-R + 3})`}>
+                <circle r="6" fill="#001510" stroke="#00ff41" strokeWidth="0.9" />
+                <text textAnchor="middle" dominantBaseline="central"
+                  fontSize="6.5" fill="#00ff41" fontFamily="monospace">
+                  {node.queryCount}
+                </text>
+              </g>
+            )}
+          </g>
+        )
+      })}
+    </svg>
   )
 }
 
@@ -401,13 +539,12 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
   nodes: Map<string, AFNode>; tools: ToolEvent[]
   toolsOpen: boolean; onToggle: () => void
 }) {
-  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [focusedId, setFocusedId] = useState('__root__')
   const evEndRef = useRef<HTMLDivElement>(null)
   useEffect(() => { evEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tools])
+  useEffect(() => { if (!nodes.has(focusedId)) setFocusedId('__root__') }, [nodes, focusedId])
 
   const focusedNode = nodes.get(focusedId) ?? nodes.get('__root__')
-  const relatedIds = hoveredId ? getRelatedIds(nodes, hoveredId) : new Set<string>()
   const hasTree = nodes.size > 1
   const queryingCount = [...nodes.values()].filter(n => n.state === 'querying').length
 
@@ -456,14 +593,13 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
         ))}
       </div>
 
-      {/* Tree */}
-      <div className="pi-tree-body">
-        {hasTree && focusedNode ? (
-          <NodeTreeItem
-            nodeId={focusedNode.id} nodes={nodes} isLastStack={[]}
-            relatedIds={relatedIds}
-            onHover={setHoveredId}
-            onFocus={id => { setFocusedId(id); setHoveredId(null) }}
+      {/* SVG Graph */}
+      <div className="pi-graph-body">
+        {hasTree ? (
+          <PiNodeGraph
+            nodes={nodes}
+            focusedId={focusedId}
+            onFocus={setFocusedId}
           />
         ) : (
           <div className="pi-empty">
