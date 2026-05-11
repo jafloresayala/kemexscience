@@ -1185,7 +1185,9 @@ export default function App() {
   })
 
   const chatEndRef  = useRef<HTMLDivElement>(null)
+  const chatLogRef  = useRef<HTMLDivElement>(null)
   const inputRef    = useRef<HTMLInputElement>(null)
+  const [atBottom, setAtBottom] = useState(true)
 
   const [toolsOpen, setToolsOpen] = useState(true)
   const [lightMode, setLightMode] = useState(false)
@@ -1206,8 +1208,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // ── Auto-scroll ────────────────────────────────────────────────────────────
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  // ── Auto-scroll (only when user is already at the bottom) ─────────────────
+  useEffect(() => {
+    if (atBottom) chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, atBottom])
+
+  const handleChatScroll = useCallback(() => {
+    const el = chatLogRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    setAtBottom(nearBottom)
+  }, [])
 
   // ── AF Tree: AI-query nodes (derived) + user-explored nodes (state) ────────
   const aiNodes = useMemo(() => buildAfTree(tools), [tools])
@@ -1612,7 +1623,7 @@ export default function App() {
       <div className="main">
         {/* Chat */}
         <div className="chat-panel">
-          <div className="chat-log">
+          <div className="chat-log" ref={chatLogRef} onScroll={handleChatScroll}>
             {messages.map(m => (
               <MessageBubble
                 key={m.id}
@@ -1623,6 +1634,15 @@ export default function App() {
             ))}
             <div ref={chatEndRef} />
           </div>
+          {!atBottom && (
+            <button
+              className="scroll-to-bottom-btn"
+              onClick={() => { setAtBottom(true); chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }}
+              title="Ir al final del chat"
+            >
+              ↓
+            </button>
+          )}
         </div>
 
         {/* Tool Activity */}
