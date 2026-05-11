@@ -371,6 +371,102 @@ body {
   background: var(--bg4);
   flex-shrink: 0;
 }
+
+/* ── Header button active state ── */
+.pi-hdr-btn-active {
+  color: var(--cyan) !important;
+  border-color: rgba(0,200,255,0.5) !important;
+  background: rgba(0,200,255,0.1) !important;
+}
+
+/* ── Hierarchy List ─────────────────────────────────────────────── */
+.hi-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+  background: transparent;
+}
+.hi-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-right: 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--dim);
+  border-left: 2px solid transparent;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.hi-row:hover {
+  background: rgba(0,200,255,0.06);
+  color: var(--cyan);
+  border-left-color: rgba(0,200,255,0.35);
+}
+.hi-row-selected {
+  background: rgba(0,255,65,0.06) !important;
+  color: var(--green) !important;
+  border-left-color: var(--green) !important;
+}
+.hi-row-tag {
+  color: #7030a0;
+}
+.hi-row-tag:hover {
+  color: #d080ff;
+  background: rgba(208,128,255,0.07);
+  border-left-color: rgba(208,128,255,0.4);
+}
+.hi-row-tag.hi-row-selected {
+  color: var(--green) !important;
+}
+.hi-icon {
+  flex-shrink: 0;
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+  opacity: 0.7;
+}
+.hi-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.02em;
+}
+.hi-uom {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: rgba(208,128,255,0.55);
+  padding: 0 3px;
+}
+.hi-pin {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: var(--green);
+}
+.hi-loading {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--yellow);
+  animation: svg-icon-blink 0.65s ease-in-out infinite;
+}
+.hi-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--dim2);
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+/* Light mode overrides */
+.light .hi-row         { color: #445; }
+.light .hi-row:hover   { color: #0072b8; background: rgba(0,114,184,0.06); }
+.light .hi-row-tag     { color: #7030a0; }
+.light .hi-row-tag:hover { color: #9040c0; }
+
 .pi-ev {
   display: flex;
   align-items: center;

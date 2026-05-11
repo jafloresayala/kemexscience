@@ -832,6 +832,82 @@ function PiNodeGraph({
 }
 
 // ─── PI Tree Panel ────────────────────────────────────────────────────────────
+
+/** Renders a flat indented list of all loaded nodes, sorted by path depth */
+function HierarchyList({ nodes, selectedId, onSelect, onExpand, onLoadTags }: {
+  nodes: Map<string, AFNode>
+  selectedId: string | null
+  onSelect: (node: AFNode) => void
+  onExpand: (node: AFNode) => void
+  onLoadTags: (node: AFNode) => void
+}) {
+  // Build display order: BFS from root preserving tree order
+  const order: AFNode[] = []
+  const visited = new Set<string>()
+  const queue: string[] = ['__root__']
+  while (queue.length) {
+    const id = queue.shift()!
+    if (visited.has(id)) continue
+    visited.add(id)
+    const node = nodes.get(id)
+    if (!node) continue
+    if (node.type !== 'root') order.push(node)
+    if (!node.collapsed) {
+      for (const cid of node.childIds) queue.push(cid)
+    }
+  }
+
+  // Compute depth for indentation
+  const depthOf = (node: AFNode): number => {
+    let d = 0; let cur: AFNode | undefined = node
+    while (cur?.parentId && cur.parentId !== '__root__') {
+      d++; cur = nodes.get(cur.parentId)
+    }
+    return d
+  }
+
+  return (
+    <div className="hi-list">
+      {order.map(node => {
+        const depth = depthOf(node)
+        const isSelected = node.id === selectedId
+        const isTag = node.type === 'tag'
+        const querying = node.state === 'querying'
+        const canExpand = !node.loaded && !isTag
+        const canLoadTags = !isTag && node.loaded && node.childIds.length === 0 && !querying
+        const hasChildren = node.childIds.length > 0
+        const isCollapsed = node.collapsed
+
+        return (
+          <div
+            key={node.id}
+            className={`hi-row${isSelected ? ' hi-row-selected' : ''}${isTag ? ' hi-row-tag' : ''}`}
+            style={{ paddingLeft: `${12 + depth * 16}px` }}
+            onClick={() => {
+              if (isTag) { onSelect(node); return }
+              if (canExpand) { onExpand(node); return }
+              if (canLoadTags) { onLoadTags(node); return }
+              onSelect(node)
+            }}
+          >
+            {/* Expand / collapse / leaf icon */}
+            <span className="hi-icon">
+              {querying ? '⟳' : isTag ? '◇' : canExpand ? '›' : hasChildren && !isCollapsed ? '⌄' : hasChildren ? '›' : '·'}
+            </span>
+            <span className="hi-name">{node.name}</span>
+            {isTag && node.uom && <span className="hi-uom">{node.uom}</span>}
+            {querying && <span className="hi-loading">…</span>}
+            {isSelected && <span className="hi-pin">✦</span>}
+          </div>
+        )
+      })}
+      {order.length === 0 && (
+        <div className="hi-empty">Cargando jerarquía…</div>
+      )}
+    </div>
+  )
+}
+
 function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, onExpandNode, onCollapseNode, onLoadTags }: {
   nodes: Map<string, AFNode>; tools: ToolEvent[]
   toolsOpen: boolean; onToggle: () => void
@@ -842,6 +918,7 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
 }) {
   const [focusedId, setFocusedId] = useState('__root__')
   const [fsTree, setFsTree] = useState(false)
+  const [view, setView] = useState<'graph' | 'list'>('graph')
   const evEndRef = useRef<HTMLDivElement>(null)
   useEffect(() => { evEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tools])
   useEffect(() => { if (!nodes.has(focusedId)) setFocusedId('__root__') }, [nodes, focusedId])
@@ -904,7 +981,14 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
         <span className="pi-hdr-logo">⬡</span>
         <span className="pi-hdr-title">PI AF TREE</span>
         <div className="pi-hdr-actions">
-          {focusedId !== '__root__' && (
+          {/* View toggle */}
+          <button
+            className={`pi-hdr-btn${view === 'graph' ? ' pi-hdr-btn-active' : ''}`}
+            onClick={() => setView('graph')} title="Vista gráfica">⬡</button>
+          <button
+            className={`pi-hdr-btn${view === 'list' ? ' pi-hdr-btn-active' : ''}`}
+            onClick={() => setView('list')} title="Lista jerárquica">☰</button>
+          {view === 'graph' && focusedId !== '__root__' && (
             <button className="pi-hdr-btn" onClick={() =>
               handleFocus(nodes.get(focusedId)?.parentId ?? '__root__')
             } title="Subir nivel">↑</button>
@@ -917,38 +1001,55 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
         </div>
       </div>
 
-      {/* Breadcrumb */}
-      <div className="pi-crumb">
-        {breadcrumb.map((n, i) => (
-          <span key={n.id}>
-            {i > 0 && <span className="pi-crumb-sep"> › </span>}
-            <span
-              className={`pi-crumb-item${n.id === focusedNode?.id ? ' pi-crumb-active' : ''}`}
-              onClick={() => handleFocus(n.id)}
-            >{n.name}</span>
-          </span>
-        ))}
-      </div>
+      {/* Breadcrumb — graph view only */}
+      {view === 'graph' && (
+        <div className="pi-crumb">
+          {breadcrumb.map((n, i) => (
+            <span key={n.id}>
+              {i > 0 && <span className="pi-crumb-sep"> › </span>}
+              <span
+                className={`pi-crumb-item${n.id === focusedNode?.id ? ' pi-crumb-active' : ''}`}
+                onClick={() => handleFocus(n.id)}
+              >{n.name}</span>
+            </span>
+          ))}
+        </div>
+      )}
 
-      {/* SVG Graph */}
+      {/* Section label for list view */}
+      {view === 'list' && (
+        <div className="pi-divider" style={{ marginTop: 0 }}>── HIERARCHY LIST ──</div>
+      )}
+
+      {/* Graph / List body */}
       <div className="pi-graph-body">
-        {hasTree ? (
-          <PiNodeGraph
+        {view === 'graph' ? (
+          hasTree ? (
+            <PiNodeGraph
+              nodes={nodes}
+              focusedId={focusedId}
+              onFocus={handleFocus}
+              onExpand={onExpandNode}
+              onCollapse={onCollapseNode}
+              onLoadTags={onLoadTags}
+              selectedId={selectedId}
+              onSelect={onSelect}
+            />
+          ) : (
+            <div className="pi-empty">
+              <div className="pi-empty-icon">◌</div>
+              <div>Cargando árbol PI…</div>
+              <div>Haz click en un nodo para explorar</div>
+            </div>
+          )
+        ) : (
+          <HierarchyList
             nodes={nodes}
-            focusedId={focusedId}
-            onFocus={handleFocus}
-            onExpand={onExpandNode}
-            onCollapse={onCollapseNode}
-            onLoadTags={onLoadTags}
             selectedId={selectedId}
             onSelect={onSelect}
+            onExpand={onExpandNode}
+            onLoadTags={onLoadTags}
           />
-        ) : (
-          <div className="pi-empty">
-            <div className="pi-empty-icon">◌</div>
-            <div>Cargando árbol PI…</div>
-            <div>Haz click en un nodo para explorar</div>
-          </div>
         )}
       </div>
 
