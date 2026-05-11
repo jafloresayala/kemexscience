@@ -67,23 +67,30 @@ asset_cache = None
 
 
 def _init_agent() -> None:
-    try:
-        project = create_project_client()
-        openai_client = project.get_openai_client()
-        conversation = openai_client.conversations.create()
-        agent = create_agent(project)
+    import time
+    max_attempts = 5
+    delay = 3  # seconds between retries
+    for attempt in range(max_attempts):
+        try:
+            project = create_project_client()
+            openai_client = project.get_openai_client()
+            conversation = openai_client.conversations.create()
+            agent = create_agent(project)
 
-        _state.update(
-            project=project,
-            openai_client=openai_client,
-            conversation=conversation,
-            agent=agent,
-            ready=True,
-            error=None,
-        )
+            _state.update(
+                project=project,
+                openai_client=openai_client,
+                conversation=conversation,
+                agent=agent,
+                ready=True,
+                error=None,
+            )
+            return
 
-    except Exception as exc:
-        _state["error"] = str(exc)
+        except Exception as exc:
+            _state["error"] = str(exc)
+            if attempt < max_attempts - 1:
+                time.sleep(delay)
 
 
 # ─── Modelos Pydantic ─────────────────────────────────────────────────────────

@@ -1258,14 +1258,19 @@ export default function App() {
           return { ...s, state: busy ? s.state : 'connecting', label: busy ? s.label : 'INICIANDO…', model: data.model ?? '—', cacheInfo }
         })
 
-        if (data.ready && !prevReady) {
-          prevReady = true
-          setMessages(prev => prev.map(m =>
-            m.id === 'banner'
-              ? { ...m, content: m.content.replace('Conectando con Azure AI Foundry…', 'Agente listo.\n\nEjemplos:\n• Enumera las lineas de producción\n• Dame las máquinas de la Linea 1 Left\n• Grafica los datos del tag Squeegee Speed de la Paste Printer en Linea 1 Left del mes de mayo 2026') }
-              : m
-          ))
-          setTimeout(() => inputRef.current?.focus(), 100)
+        if (data.ready) {
+          // Clear any connection-error messages now that server is up
+          setMessages(prev => prev.filter(m => m.role !== 'error'))
+
+          if (!prevReady) {
+            prevReady = true
+            setMessages(prev => prev.map(m =>
+              m.id === 'banner'
+                ? { ...m, content: m.content.replace('Conectando con Azure AI Foundry…', 'Agente listo.\n\nEjemplos:\n• Enumera las lineas de producción\n• Dame las máquinas de la Linea 1 Left\n• Grafica los datos del tag Squeegee Speed de la Paste Printer en Linea 1 Left del mes de mayo 2026') }
+                : m
+            ))
+            setTimeout(() => inputRef.current?.focus(), 100)
+          }
         }
 
         if (data.error && !prevReady) {
