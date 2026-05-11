@@ -480,12 +480,21 @@ function bezierEdge(x1: number, y1: number, x2: number, y2: number): string {
 }
 
 // ─── PI Node Graph (SVG) ──────────────────────────────────────────────────────
+function nodeDisplayLabel(node: AFNode): string {
+  if (!node.path) return node.name
+  const parts = node.path.replace(/\\/g, '/').split('/').filter(p => p.trim())
+  const tail = parts.slice(-2)
+  return tail.length === 2 ? tail.join(' / ') : node.name
+}
+
 function PiNodeGraph({
-  nodes, focusedId, onFocus,
+  nodes, focusedId, onFocus, selectedId, onSelect,
 }: {
   nodes: Map<string, AFNode>
   focusedId: string
   onFocus: (id: string) => void
+  selectedId: string | null
+  onSelect: (node: AFNode) => void
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
@@ -564,13 +573,14 @@ function PiNodeGraph({
         const isRoot = node.type === 'root'
         const R = isRoot ? 24 : 19
         const canDrill = node.childIds.length > 0
+        const isSelected = id === selectedId
         const shortName = node.name.length > 13 ? node.name.slice(0, 12) + '…' : node.name
 
         return (
           <g
             key={id}
             transform={`translate(${p.x},${p.y})`}
-            style={{ cursor: canDrill ? 'pointer' : 'default' }}
+            style={{ cursor: isRoot ? 'default' : 'pointer' }}
             onMouseEnter={() => setHoveredId(id)}
             onMouseLeave={() => setHoveredId(null)}
             onClick={() => canDrill && onFocus(id)}
@@ -579,6 +589,11 @@ function PiNodeGraph({
             {querying && (
               <circle r={R + 9} fill="none" stroke="#ffb700" strokeWidth="1.2"
                 opacity="0.5" className="svg-pulse-ring" />
+            )}
+            {/* Selected ring */}
+            {isSelected && (
+              <circle r={R + 12} fill="none" stroke="#00ff41" strokeWidth="1.2"
+                strokeDasharray="4 3" opacity="0.8" />
             )}
             {/* Glow halo when lit or querying */}
             {(lit || querying) && (
@@ -628,6 +643,22 @@ function PiNodeGraph({
                 </text>
               </g>
             )}
+            {/* Pin / select badge — visible on hover for non-root nodes */}
+            {hoveredId === id && !isRoot && (
+              <g
+                transform={`translate(${-R + 3},${-R + 3})`}
+                style={{ cursor: 'pointer' }}
+                onClick={e => { e.stopPropagation(); onSelect(node) }}
+              >
+                <circle r="7" fill="rgba(0,12,30,0.95)"
+                  stroke={isSelected ? '#00ff41' : '#00c8ff'} strokeWidth="1.3" />
+                <text textAnchor="middle" dominantBaseline="central"
+                  fontSize="10" fill={isSelected ? '#00ff41' : '#00c8ff'}
+                  fontFamily="monospace">
+                  {isSelected ? '\u2212' : '+'}
+                </text>
+              </g>
+            )}
           </g>
         )
       })}
@@ -636,9 +667,10 @@ function PiNodeGraph({
 }
 
 // ─── PI Tree Panel ────────────────────────────────────────────────────────────
-function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
+function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }: {
   nodes: Map<string, AFNode>; tools: ToolEvent[]
   toolsOpen: boolean; onToggle: () => void
+  selectedId: string | null; onSelect: (node: AFNode) => void
 }) {
   const [focusedId, setFocusedId] = useState('__root__')
   const evEndRef = useRef<HTMLDivElement>(null)
@@ -701,6 +733,8 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
             nodes={nodes}
             focusedId={focusedId}
             onFocus={setFocusedId}
+            selectedId={selectedId}
+            onSelect={onSelect}
           />
         ) : (
           <div className="pi-empty">
@@ -1056,6 +1090,7 @@ export default function App() {
   const [toolsOpen, setToolsOpen] = useState(true)
   const [lightMode, setLightMode] = useState(false)
   const [zoomedPlot, setZoomedPlot] = useState<string | null>(null)
+  const [ctxNode, setCtxNode] = useState<AFNode | null>(null)
   const [scanState, setScanState] = useState<ScanState>({
     phase: 'idle', pct: 0, log: [], summary: null, error: null,
   })
@@ -1143,12 +1178,15 @@ export default function App() {
 
     const agentId = uid()
     const agentTs = now()
+    const messageToSend = ctxNode
+      ? `[Nodo seleccionado en PI AF Tree: "${ctxNode.name}" \u2014 Ruta completa: ${ctxNode.path}]\n\n${text}`
+      : text
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: messageToSend }),
       })
 
       let lastAnswerContent = ''
@@ -1421,12 +1459,25 @@ export default function App() {
           tools={tools}
           toolsOpen={toolsOpen}
           onToggle={() => setToolsOpen(o => !o)}
+          selectedId={ctxNode?.id ?? null}
+          onSelect={n => setCtxNode(prev => prev?.id === n.id ? null : n)}
         />
       </div>
 
       {/* AI Pet + Input */}
       <div className="input-zone">
         <AIPet state={status.state} lightMode={lightMode} />
+        {/* Context node pill */}
+        {ctxNode && (
+          <div className="ctx-pill-row">
+            <button className="ctx-pill" onClick={() => setCtxNode(null)}
+              title="Clic para deseleccionar">
+              <span className="ctx-pill-plus">+</span>
+              <span className="ctx-pill-label">{nodeDisplayLabel(ctxNode)}</span>
+              <span className="ctx-pill-x">×</span>
+            </button>
+          </div>
+        )}
         {/* Input */}
         <div className="input-row">
           <span className="prompt-glyph">❯</span>
