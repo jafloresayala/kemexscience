@@ -35,6 +35,7 @@ load_dotenv()
 
 import foundry_pi_agent_app as backend
 from foundry_pi_agent_app import create_agent, create_project_client, run_agent_turn
+from plant_health_scan import PlantHealthScanner, build_ai_prompt, _result_to_dict
 
 # ─── App ─────────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -258,6 +259,86 @@ def execute_code(req: ExecuteRequest) -> dict:
         "returncode": returncode,
         "plot_base64": plot_b64,
     }
+
+
+# ─── Plant Health Scan endpoint (SSE) ─────────────────────────────────────────
+_scan_state: dict = {"running": False, "scanner": None}
+
+
+async def _stream_health_scan() -> AsyncGenerator[str, None]:
+    if _scan_state["running"]:
+        yield _sse({"type": "error", "msg": "Ya hay un escaneo en curso."})
+        yield _sse({"type": "done"})
+        return
+
+    _scan_state["running"] = True
+    prog_queue: queue.Queue = queue.Queue()
+    result_holder: dict = {}
+    done_event = threading.Event()
+
+    def on_progress(d: dict):
+        prog_queue.put({"type": "progress", **d})
+
+    def run_scan():
+        try:
+            scanner = PlantHealthScanner(
+                progress_cb=on_progress,
+                output_dir=str(Path(__file__).parent),
+            )
+            _scan_state["scanner"] = scanner
+            result = scanner.run(hours=24)
+            result_holder["result"] = result
+            result_holder["prompt"] = build_ai_prompt(result)
+        except Exception as exc:
+            result_holder["error"] = str(exc)
+        finally:
+            _scan_state["running"] = False
+            _scan_state["scanner"] = None
+            done_event.set()
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+    while not done_event.is_set() or not prog_queue.empty():
+        try:
+            ev = prog_queue.get(timeout=0.15)
+            yield _sse(ev)
+        except queue.Empty:
+            await asyncio.sleep(0.1)
+
+    if "error" in result_holder:
+        yield _sse({"type": "scan_error", "msg": result_holder["error"]})
+    else:
+        r = result_holder["result"]
+        yield _sse({
+            "type": "scan_done",
+            "prompt": result_holder["prompt"],
+            "summary": {
+                "lines": r.lines_scanned,
+                "machines": r.machines_scanned,
+                "tags": r.tags_scanned,
+                "scan_id": r.scan_id,
+            },
+        })
+
+    yield _sse({"type": "done"})
+
+
+@app.post("/api/health-scan")
+async def health_scan() -> StreamingResponse:
+    return StreamingResponse(
+        _stream_health_scan(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/health-scan/cancel")
+def health_scan_cancel() -> dict:
+    scanner = _scan_state.get("scanner")
+    if scanner:
+        scanner.cancel()
+        return {"cancelled": True}
+    return {"cancelled": False}
 
 
 # ─── Servir frontend React (build estático) ───────────────────────────────────

@@ -96,6 +96,22 @@ interface ToolEvent {
 
 type AppState = 'connecting' | 'ready' | 'error' | 'thinking' | 'executing'
 
+interface ScanProgress {
+  msg: string; pct?: number; file?: string; elapsed_s?: number
+  scan_id?: string; from?: string; to?: string
+}
+interface ScanDone {
+  lines: number; machines: number; tags: number; scan_id: string
+}
+type ScanPhase = 'idle' | 'running' | 'done' | 'error'
+interface ScanState {
+  phase: ScanPhase
+  pct: number
+  log: ScanProgress[]
+  summary: ScanDone | null
+  error: string | null
+}
+
 interface Status {
   state: AppState
   label: string
@@ -259,6 +275,91 @@ function MessageBubble({
           ▶ Ejecutar código Python
         </button>
       )}
+    </div>
+  )
+}
+
+// ─── Health Scan Panel ─────────────────────────────────────────────────────────────
+function HealthScanPanel({ scan, onClose }: { scan: ScanState; onClose: () => void }) {
+  const logEndRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [scan.log])
+
+  const phaseLabel: Record<ScanPhase, string> = {
+    idle: 'LISTO', running: 'ESCANEANDO…', done: 'COMPLETADO', error: 'ERROR',
+  }
+  const phaseColor: Record<ScanPhase, string> = {
+    idle: 'var(--dim)', running: 'var(--yellow)', done: 'var(--green)', error: 'var(--red)',
+  }
+
+  return (
+    <div className="hscan-overlay" onClick={onClose}>
+      <div className="hscan-panel" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="hscan-hdr">
+          <span className="hscan-logo" style={{ color: phaseColor[scan.phase] }}>⬡</span>
+          <span className="hscan-title">PLANT HEALTH SCAN</span>
+          <span className="hscan-phase" style={{ color: phaseColor[scan.phase] }}>
+            {phaseLabel[scan.phase]}
+          </span>
+          <button className="hscan-close" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Progress bar */}
+        <div className="hscan-bar-bg">
+          <div
+            className={`hscan-bar-fill${scan.phase === 'running' ? ' hscan-bar-anim' : ''}`}
+            style={{
+              width: `${scan.pct}%`,
+              background: scan.phase === 'done' ? 'var(--green)'
+                : scan.phase === 'error' ? 'var(--red)'
+                : 'var(--yellow)',
+            }}
+          />
+        </div>
+        <div className="hscan-pct">{scan.pct.toFixed(0)}%</div>
+
+        {/* Summary */}
+        {scan.summary && (
+          <div className="hscan-summary">
+            <div className="hscan-sum-row">
+              <span className="hscan-sum-label">▣ LINEAS</span>
+              <span className="hscan-sum-val">{scan.summary.lines}</span>
+            </div>
+            <div className="hscan-sum-row">
+              <span className="hscan-sum-label">▣ MÁQUINAS</span>
+              <span className="hscan-sum-val">{scan.summary.machines}</span>
+            </div>
+            <div className="hscan-sum-row">
+              <span className="hscan-sum-label">▣ TAGS</span>
+              <span className="hscan-sum-val">{scan.summary.tags}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {scan.error && (
+          <div className="hscan-error">{scan.error}</div>
+        )}
+
+        {/* Log */}
+        <div className="hscan-log">
+          {scan.log.map((l, i) => (
+            <div key={i} className="hscan-log-row">
+              {l.pct !== undefined && (
+                <span className="hscan-log-pct">[{l.pct.toFixed(0)}%]</span>
+              )}
+              <span className="hscan-log-msg">{l.msg}</span>
+            </div>
+          ))}
+          <div ref={logEndRef} />
+        </div>
+
+        {scan.phase === 'done' && (
+          <div className="hscan-footer">
+            ✔ Listo. El agente analizará los resultados automáticamente.
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -662,6 +763,10 @@ export default function App() {
   const [toolsOpen, setToolsOpen] = useState(true)
   const [lightMode, setLightMode] = useState(false)
   const [zoomedPlot, setZoomedPlot] = useState<string | null>(null)
+  const [scanState, setScanState] = useState<ScanState>({
+    phase: 'idle', pct: 0, log: [], summary: null, error: null,
+  })
+  const [scanOpen, setScanOpen] = useState(false)
 
   // ── Escape key closes lightbox ────────────────────────────────────────────
   useEffect(() => {
@@ -829,6 +934,75 @@ export default function App() {
     setStatus(s => ({ ...s, state: 'ready', label: 'CONECTADO' }))
   }, [])
 
+  // ── Plant Health Scan ──────────────────────────────────────────────
+  const runHealthScan = useCallback(async () => {
+    if (scanState.phase === 'running') return
+    setScanState({ phase: 'running', pct: 0, log: [], summary: null, error: null })
+    setScanOpen(true)
+    try {
+      const res = await fetch('/api/health-scan', { method: 'POST' })
+      for await (const ev of readSSE(res)) {
+        const e = ev as Record<string, unknown>
+        if (e.type === 'progress') {
+          setScanState(s => ({
+            ...s,
+            pct: (e.pct as number) ?? s.pct,
+            log: [...s.log, { msg: e.msg as string, pct: e.pct as number | undefined }],
+          }))
+        } else if (e.type === 'scan_done') {
+          const summary = e.summary as ScanDone
+          const prompt = e.prompt as string
+          setScanState(s => ({ ...s, phase: 'done', pct: 100, summary }))
+          // Enviar prompt al agente automáticamente
+          setMessages(prev => [...prev, {
+            id: uid(), role: 'system',
+            content: `✅ Plant Health Scan completado\n• ${summary.lines} líneas • ${summary.machines} máquinas • ${summary.tags} tags\nAnalizando resultados con la IA…`,
+            timestamp: now(),
+          }])
+          // Mandar el prompt al agente directamente vía sendMessage logic
+          setInput(prompt)
+          setTimeout(() => {
+            setInput('')
+            setStatus(s => ({ ...s, state: 'thinking', label: 'ANALIZANDO PLANTA…' }))
+            setMessages(prev => [...prev, { id: uid(), role: 'user', content: '(Plant Health Scan — análisis automático)', timestamp: now() }])
+            const agentId = uid()
+            const agentTs = now()
+            fetch('/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: prompt }),
+            }).then(async chatRes => {
+              let lastContent = ''
+              for await (const cev of readSSE(chatRes)) {
+                const ce = cev as { type: string; content?: string; name?: string; preview?: string }
+                if (ce.type === 'tool_call' || ce.type === 'tool_result') {
+                  setTools(prev => [...prev, { id: uid(), type: ce.type as 'tool_call'|'tool_result', name: ce.name ?? '', preview: ce.preview ?? '', timestamp: now() }])
+                } else if (ce.type === 'answer') {
+                  lastContent = ce.content ?? ''
+                  setMessages(prev => {
+                    const exists = prev.find(m => m.id === agentId)
+                    if (exists) return prev.map(m => m.id === agentId ? { ...m, content: lastContent } : m)
+                    return [...prev, { id: agentId, role: 'agent', content: lastContent, timestamp: agentTs }]
+                  })
+                } else if (ce.type === 'error') {
+                  setMessages(prev => [...prev, { id: uid(), role: 'error', content: ce.content ?? 'Error', timestamp: now() }])
+                }
+              }
+              setStatus(s => ({ ...s, state: 'ready', label: 'CONECTADO' }))
+            }).catch(err => {
+              setMessages(prev => [...prev, { id: uid(), role: 'error', content: String(err), timestamp: now() }])
+              setStatus(s => ({ ...s, state: 'ready', label: 'CONECTADO' }))
+            })
+          }, 200)
+        } else if (e.type === 'scan_error') {
+          setScanState(s => ({ ...s, phase: 'error', error: e.msg as string }))
+        }
+      }
+    } catch (err) {
+      setScanState(s => ({ ...s, phase: 'error', error: String(err) }))
+    }
+  }, [scanState.phase])
+
   // ── Cache refresh ──────────────────────────────────────────────────────────
   const refreshCache = async () => {
     await fetch('/api/cache/refresh', { method: 'POST' })
@@ -866,6 +1040,18 @@ export default function App() {
         <span className="status-val">{status.model}</span>
         <span className="status-sep">│</span>
         <span className="status-dim">{status.cacheInfo}</span>
+        <button
+          className={`hscan-btn${scanState.phase === 'running' ? ' hscan-btn-active' : ''}`}
+          onClick={() => scanState.phase === 'idle' || scanState.phase === 'done' || scanState.phase === 'error'
+            ? runHealthScan()
+            : setScanOpen(true)
+          }
+          title="Plant Health Scan — análisis de toda la planta">
+          {scanState.phase === 'running'
+            ? `▶ SCAN ${scanState.pct.toFixed(0)}%`
+            : scanState.phase === 'done' ? '✔ SCAN'
+            : '⬡ SCAN'}
+        </button>
         <button className="theme-btn" onClick={() => setLightMode(l => !l)} title="Cambiar tema">
           {lightMode ? '◑ DARK' : '○ LIGHT'}
         </button>
@@ -918,6 +1104,11 @@ export default function App() {
         </button>
         </div>
       </div>
+
+      {/* Health Scan Panel */}
+      {scanOpen && (
+        <HealthScanPanel scan={scanState} onClose={() => setScanOpen(false)} />
+      )}
 
       {/* Lightbox */}
       {zoomedPlot && (
