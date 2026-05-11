@@ -186,6 +186,32 @@ def status() -> dict:
     }
 
 
+@app.get("/api/pi/children")
+def pi_children(path: str = "") -> dict:
+    """
+    Devuelve los hijos inmediatos de un nodo AF de PI.
+    Usado por el explorador interactivo del PI AF Tree en el frontend.
+    """
+    try:
+        import json as _json
+        raw = backend.pi_fetch_child_elements(path or None)
+        data = _json.loads(raw.replace("... [TRUNCADO]", ""))
+        children = data.get("children", [])
+        return {
+            "path": data.get("query_path", path),
+            "count": len(children),
+            "children": [
+                {
+                    "name": c.get("name", ""),
+                    "path": c.get("path", ""),
+                }
+                for c in children
+            ],
+        }
+    except Exception as exc:
+        return {"path": path, "count": 0, "children": [], "error": str(exc)}
+
+
 @app.post("/api/cache/refresh")
 def cache_refresh() -> dict:
     """

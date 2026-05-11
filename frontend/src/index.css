@@ -102,8 +102,20 @@ body {
   flex-direction: column;
   background: var(--bg3);
   overflow: hidden;
-  transition: width 0.2s ease;
+  position: relative;
 }
+
+/* Drag-to-resize handle on the left edge */
+.pi-resize-handle {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+.pi-resize-handle:hover { background: rgba(0,200,255,0.25); }
 .tool-reopen-btn {
   flex-shrink: 0;
   width: 22px;
@@ -230,15 +242,16 @@ body {
 /* SVG Node Graph body */
 .pi-graph-body {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   background-color: #03070e;
   background-image: radial-gradient(circle, rgba(0,200,255,0.055) 1px, transparent 1px);
   background-size: 20px 20px;
   background-attachment: local;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 6px 2px;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+  user-select: none;
 }
 
 /* SVG animations */

@@ -371,6 +371,7 @@ interface AFNode {
   type: 'root' | 'element'
   state: 'idle' | 'querying' | 'done'
   toolName: string; queryCount: number; ts: string
+  loaded: boolean
 }
 
 function parseToolPath(preview: string): string | null {
@@ -386,7 +387,7 @@ function buildAfTree(events: ToolEvent[]): Map<string, AFNode> {
   map.set('__root__', {
     id: '__root__', name: 'PI ROOT', path: '',
     parentId: null, childIds: [], type: 'root',
-    state: 'idle', toolName: '', queryCount: 0, ts: '',
+    state: 'idle', toolName: '', queryCount: 0, ts: '', loaded: true,
   })
   let lastPath: string | null = null
   for (const ev of events) {
@@ -412,6 +413,7 @@ function buildAfTree(events: ToolEvent[]): Map<string, AFNode> {
             childIds: [], type: 'element',
             state: isLast ? 'querying' : 'done',
             toolName: isLast ? ev.name : '', queryCount: isLast ? 1 : 0, ts: isLast ? ev.timestamp : '',
+            loaded: false,
           })
           const parent = map.get(parentId)!
           if (!parent.childIds.includes(nid))
@@ -498,6 +500,37 @@ function PiNodeGraph({
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
+  // ── Zoom / pan state ──────────────────────────────────────────────
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const dragging = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
+
+  // Reset zoom+pan when focusedId changes
+  useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }) }, [focusedId])
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    const factor = e.deltaY < 0 ? 1.12 : 0.9
+    setZoom(z => Math.min(8, Math.max(0.15, z * factor)))
+  }, [])
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0 && e.button !== 2) return
+    e.preventDefault()
+    dragging.current = { startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
+    const onMove = (me: MouseEvent) => {
+      if (!dragging.current) return
+      setPan({
+        x: dragging.current.panX + (me.clientX - dragging.current.startX),
+        y: dragging.current.panY + (me.clientY - dragging.current.startY),
+      })
+    }
+    const onUp = () => { dragging.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [pan])
+
   const positions = useMemo(
     () => computeLayout(focusedId, nodes),
     [focusedId, nodes],
@@ -510,15 +543,6 @@ function PiNodeGraph({
 
   if (positions.size === 0) return null
 
-  const allPos = [...positions.values()]
-  const xs = allPos.map(p => p.x)
-  const ys = allPos.map(p => p.y)
-  const PAD = 52
-  const vx = Math.min(...xs) - PAD
-  const vy = Math.min(...ys) - PAD
-  const vw = Math.max(...xs) - vx + PAD
-  const vh = Math.max(...ys) - vy + PAD + 28
-
   const stateCol = (n: AFNode, lit: boolean) => {
     if (lit)                              return '#00c8ff'
     if (n.state === 'querying')           return '#ffb700'
@@ -529,8 +553,11 @@ function PiNodeGraph({
 
   return (
     <svg
-      viewBox={`${vx} ${vy} ${vw} ${vh}`}
-      style={{ width: '100%', height: '100%', display: 'block', minHeight: 120 }}
+      ref={svgRef}
+      style={{ width: '100%', height: '100%', display: 'block', minHeight: 160, cursor: dragging.current ? 'grabbing' : 'grab' }}
+      onWheel={handleWheel}
+      onMouseDown={handleMouseDown}
+      onContextMenu={e => e.preventDefault()}
     >
       <defs>
         <filter id="glowC" x="-60%" y="-60%" width="220%" height="220%">
@@ -542,6 +569,7 @@ function PiNodeGraph({
           <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
       </defs>
+      <g transform={`translate(${pan.x + 170},${pan.y + 40}) scale(${zoom})`}>
 
       {/* ── Edges ── */}
       {[...positions.entries()].flatMap(([id, p]) => {
@@ -662,20 +690,28 @@ function PiNodeGraph({
           </g>
         )
       })}
+      </g>
     </svg>
   )
 }
 
 // ─── PI Tree Panel ────────────────────────────────────────────────────────────
-function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }: {
+function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, onExpandNode }: {
   nodes: Map<string, AFNode>; tools: ToolEvent[]
   toolsOpen: boolean; onToggle: () => void
   selectedId: string | null; onSelect: (node: AFNode) => void
+  onExpandNode: (node: AFNode) => void
 }) {
   const [focusedId, setFocusedId] = useState('__root__')
   const evEndRef = useRef<HTMLDivElement>(null)
   useEffect(() => { evEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tools])
   useEffect(() => { if (!nodes.has(focusedId)) setFocusedId('__root__') }, [nodes, focusedId])
+
+  const handleFocus = useCallback((id: string) => {
+    setFocusedId(id)
+    const node = nodes.get(id)
+    if (node && !node.loaded && node.type !== 'root') onExpandNode(node)
+  }, [nodes, onExpandNode])
 
   const focusedNode = nodes.get(focusedId) ?? nodes.get('__root__')
   const hasTree = nodes.size > 1
@@ -684,6 +720,21 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }
   const breadcrumb: AFNode[] = []
   let cur: AFNode | undefined = focusedNode
   while (cur) { breadcrumb.unshift(cur); cur = cur.parentId ? nodes.get(cur.parentId) : undefined }
+
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = panelRef.current?.offsetWidth ?? 340
+    const onMove = (me: MouseEvent) => {
+      const newW = Math.max(220, Math.min(700, startW + (startX - me.clientX)))
+      if (panelRef.current) panelRef.current.style.width = `${newW}px`
+    }
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
 
   if (!toolsOpen) {
     return (
@@ -698,7 +749,9 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }
   }
 
   return (
-    <div className="tool-panel">
+    <div className="tool-panel" ref={panelRef}>
+      {/* Resize handle */}
+      <div className="pi-resize-handle" onMouseDown={startResize} title="Arrastrar para redimensionar" />
       {/* Header */}
       <div className="pi-hdr">
         <span className="pi-hdr-logo">⬡</span>
@@ -706,7 +759,7 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }
         <div className="pi-hdr-actions">
           {focusedId !== '__root__' && (
             <button className="pi-hdr-btn" onClick={() =>
-              setFocusedId(nodes.get(focusedId)?.parentId ?? '__root__')
+              handleFocus(nodes.get(focusedId)?.parentId ?? '__root__')
             } title="Subir nivel">↑</button>
           )}
           <button className="pi-hdr-btn" onClick={onToggle} title="Colapsar">▶</button>
@@ -720,7 +773,7 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }
             {i > 0 && <span className="pi-crumb-sep"> › </span>}
             <span
               className={`pi-crumb-item${n.id === focusedNode?.id ? ' pi-crumb-active' : ''}`}
-              onClick={() => setFocusedId(n.id)}
+              onClick={() => handleFocus(n.id)}
             >{n.name}</span>
           </span>
         ))}
@@ -732,7 +785,7 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect }
           <PiNodeGraph
             nodes={nodes}
             focusedId={focusedId}
-            onFocus={setFocusedId}
+            onFocus={handleFocus}
             selectedId={selectedId}
             onSelect={onSelect}
           />
@@ -1108,7 +1161,74 @@ export default function App() {
 
   // ── Auto-scroll ────────────────────────────────────────────────────────────
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
-  const afNodes = useMemo(() => buildAfTree(tools), [tools])
+
+  // ── AF Tree: AI-query nodes (derived) + user-explored nodes (state) ────────
+  const aiNodes = useMemo(() => buildAfTree(tools), [tools])
+  const [explorerNodes, setExplorerNodes] = useState<Map<string, AFNode>>(new Map())
+
+  // Merge: AI nodes take precedence for state/queryCount; explorer fills in structure
+  const afNodes = useMemo(() => {
+    const merged = new Map<string, AFNode>(explorerNodes)
+    for (const [id, n] of aiNodes) {
+      const ex = merged.get(id)
+      if (ex) {
+        // AI node wins for state + queryCount; keep explorer's childIds if richer
+        const childIds = [...new Set([...ex.childIds, ...n.childIds])]
+        merged.set(id, { ...ex, ...n, childIds, loaded: ex.loaded || n.loaded })
+      } else {
+        merged.set(id, n)
+      }
+      // Ensure parent chain exists
+      if (n.parentId && !merged.has(n.parentId)) {
+        // parent will be added by its own iteration
+      }
+    }
+    return merged
+  }, [aiNodes, explorerNodes])
+
+  // Fetch children from PI API and inject into explorerNodes
+  const loadChildren = useCallback(async (node: AFNode) => {
+    if (node.loaded || node.type === 'root') return
+    setExplorerNodes(prev => {
+      const next = new Map(prev)
+      const n = next.get(node.id) ?? node
+      next.set(node.id, { ...n, loaded: false, state: n.state === 'idle' ? 'querying' : n.state })
+      return next
+    })
+    try {
+      const res = await fetch(`/api/pi/children?path=${encodeURIComponent(node.path)}`)
+      const data = await res.json() as { children: { name: string; path: string }[] }
+      setExplorerNodes(prev => {
+        const next = new Map(prev)
+        const parentId = node.id
+        const newChildIds: string[] = []
+        for (const ch of data.children) {
+          const segs = ch.path.replace(/\\/g, '/').split('/').filter(Boolean)
+          const nid = `n:${segs.join('/')}`
+          if (!next.has(nid)) {
+            next.set(nid, {
+              id: nid, name: ch.name, path: ch.path,
+              parentId, childIds: [], type: 'element',
+              state: 'idle', toolName: '', queryCount: 0, ts: '',
+              loaded: false,
+            } as AFNode)
+          }
+          if (!newChildIds.includes(nid)) newChildIds.push(nid)
+        }
+        const parent = next.get(parentId) ?? node
+        const merged = [...new Set([...parent.childIds, ...newChildIds])]
+        next.set(parentId, { ...parent, childIds: merged, loaded: true, state: 'done' })
+        return next
+      })
+    } catch {
+      setExplorerNodes(prev => {
+        const next = new Map(prev)
+        const n = next.get(node.id) ?? node
+        next.set(node.id, { ...n, loaded: true })
+        return next
+      })
+    }
+  }, [])
 
   // ── Status polling ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1461,6 +1581,7 @@ export default function App() {
           onToggle={() => setToolsOpen(o => !o)}
           selectedId={ctxNode?.id ?? null}
           onSelect={n => setCtxNode(prev => prev?.id === n.id ? null : n)}
+          onExpandNode={loadChildren}
         />
       </div>
 
