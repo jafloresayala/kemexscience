@@ -258,7 +258,7 @@ def cache_refresh() -> dict:
     limpia los archivos de resultados de escaneo.
     """
     project_dir = Path(__file__).parent
-    scan_files = list(project_dir.glob("health_scan_*.json"))
+    scan_files = list(project_dir.glob("health_scan_*.json")) + list(project_dir.glob("health_scan_*_prompt.txt"))
     deleted = []
     errors = []
     for f in scan_files:
@@ -267,6 +267,7 @@ def cache_refresh() -> dict:
             deleted.append(f.name)
         except Exception as exc:
             errors.append(f"{f.name}: {exc}")
+    _scan_prompts.clear()
     return {
         "deleted": len(deleted),
         "files": deleted,
@@ -357,6 +358,7 @@ def execute_code(req: ExecuteRequest) -> dict:
 
 # ─── Plant Health Scan endpoint (SSE) ─────────────────────────────────────────
 _scan_state: dict = {"running": False, "scanner": None}
+_scan_prompts: dict[str, str] = {}  # scan_id → prompt (in-memory + written to disk)
 
 
 def _parse_scan_dt(s: str) -> "datetime | None":
@@ -410,6 +412,14 @@ async def _stream_health_scan(
             result = scanner.run(from_dt=parsed_from, to_dt=parsed_to)
             result_holder["result"] = result
             result_holder["prompt"] = build_ai_prompt(result, plan=plan)
+            # Cache prompt server-side so the frontend fetches it separately
+            # (avoids embedding large strings in SSE events)
+            _scan_prompts[result.scan_id] = result_holder["prompt"]
+            try:
+                prompt_path = Path(__file__).parent / f"health_scan_{result.scan_id}_prompt.txt"
+                prompt_path.write_text(result_holder["prompt"], encoding="utf-8")
+            except Exception:
+                pass  # non-critical
         except Exception as exc:
             result_holder["error"] = str(exc)
         finally:
@@ -432,7 +442,8 @@ async def _stream_health_scan(
         r = result_holder["result"]
         yield _sse({
             "type": "scan_done",
-            "prompt": result_holder["prompt"],
+            # prompt is NOT included here — stored server-side and fetched separately
+            # by the frontend via GET /api/health-scan/prompt/{scan_id}
             "summary": {
                 "lines": r.lines_scanned,
                 "machines": r.machines_scanned,
@@ -596,6 +607,26 @@ def health_scan_table(
             "anomaly": sum(1 for r in rows if r["status"] not in ("OK", "NO_DATA")),
         },
     }
+
+
+@app.get("/api/health-scan/prompt/{scan_id}")
+def health_scan_prompt(scan_id: str) -> dict:
+    """
+    Devuelve el prompt de IA almacenado para un escaneo.
+    El frontend lo obtiene después de recibir el evento scan_done para no
+    depender de que el JSON del evento SSE llegue completo.
+    """
+    import re as _re
+    if not _re.match(r"^[0-9_]+$", scan_id):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="scan_id inválido")
+    if scan_id in _scan_prompts:
+        return {"prompt": _scan_prompts[scan_id]}
+    prompt_path = Path(__file__).parent / f"health_scan_{scan_id}_prompt.txt"
+    if prompt_path.exists():
+        return {"prompt": prompt_path.read_text(encoding="utf-8")}
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Prompt no encontrado para este escaneo")
 
 
 # ─── Servir frontend React (build estático) ───────────────────────────────────

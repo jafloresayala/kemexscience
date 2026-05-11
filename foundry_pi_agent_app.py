@@ -880,7 +880,10 @@ def run_agent_turn(
             )
 
         if not tool_outputs:
-            return response.output_text
+            return (
+                response.output_text
+                or "No se recibió respuesta del modelo. El contexto puede ser demasiado grande — intenta con un rango de tiempo menor o un Plan de análisis más específico."
+            )
 
         response = openai_client.responses.create(
             input=tool_outputs,

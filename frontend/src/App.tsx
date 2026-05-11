@@ -2036,7 +2036,6 @@ export default function App() {
           }))
         } else if (e.type === 'scan_done') {
           const summary = e.summary as ScanDone
-          const prompt = e.prompt as string
           setScanState(s => ({ ...s, phase: 'done', pct: 100, summary }))
           // Enviar prompt al agente automáticamente
           setMessages(prev => [...prev, {
@@ -2044,40 +2043,57 @@ export default function App() {
             content: `✅ Plant Health Scan completado\n• ${summary.lines} líneas • ${summary.machines} máquinas • ${summary.tags} tags${plan.trim() ? `\n🎯 Plan: ${plan.trim().slice(0, 80)}${plan.length > 80 ? '…' : ''}` : ''}\nAnalizando resultados con la IA…`,
             timestamp: now(),
           }])
-          // Mandar el prompt al agente directamente vía sendMessage logic
-          setInput(prompt)
+          const scanId = summary.scan_id
           setTimeout(() => {
-            setInput('')
             setStatus(s => ({ ...s, state: 'thinking', label: 'ANALIZANDO PLANTA…' }))
             setMessages(prev => [...prev, { id: uid(), role: 'user', content: '(Plant Health Scan — análisis automático)', timestamp: now() }])
             const agentId = uid()
             const agentTs = now()
-            fetch('/api/chat', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message: prompt }),
-            }).then(async chatRes => {
-              let lastContent = ''
-              for await (const cev of readSSE(chatRes)) {
-                const ce = cev as { type: string; content?: string; name?: string; preview?: string }
-                if (ce.type === 'tool_call' || ce.type === 'tool_result') {
-                  setTools(prev => [...prev, { id: uid(), type: ce.type as 'tool_call'|'tool_result', name: ce.name ?? '', preview: ce.preview ?? '', timestamp: now() }])
-                } else if (ce.type === 'answer') {
-                  lastContent = ce.content ?? ''
-                  setMessages(prev => {
-                    const exists = prev.find(m => m.id === agentId)
-                    if (exists) return prev.map(m => m.id === agentId ? { ...m, content: lastContent } : m)
-                    return [...prev, { id: agentId, role: 'agent', content: lastContent, timestamp: agentTs }]
-                  })
-                } else if (ce.type === 'error') {
-                  setMessages(prev => [...prev, { id: uid(), role: 'error', content: ce.content ?? 'Error', timestamp: now() }])
+            // Use async IIFE so we can await fetch calls cleanly
+            ;(async () => {
+              try {
+                // Fetch the AI prompt stored server-side.
+                // The prompt is NOT embedded in the SSE scan_done event because
+                // large JSON payloads in a single SSE line can be silently dropped
+                // by the browser's JSON.parse on parse failure.
+                const promptRes = await fetch(`/api/health-scan/prompt/${scanId}`)
+                if (!promptRes.ok) throw new Error(`No se pudo obtener el prompt del escaneo (HTTP ${promptRes.status})`)
+                const { prompt } = await promptRes.json() as { prompt: string }
+
+                const chatRes = await fetch('/api/chat', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ message: prompt }),
+                })
+                let lastContent = ''
+                for await (const cev of readSSE(chatRes)) {
+                  const ce = cev as { type: string; content?: string; name?: string; preview?: string }
+                  if (ce.type === 'tool_call' || ce.type === 'tool_result') {
+                    setTools(prev => [...prev, { id: uid(), type: ce.type as 'tool_call'|'tool_result', name: ce.name ?? '', preview: ce.preview ?? '', timestamp: now() }])
+                  } else if (ce.type === 'answer') {
+                    lastContent = ce.content ?? ''
+                    setMessages(prev => {
+                      const exists = prev.find(m => m.id === agentId)
+                      if (exists) return prev.map(m => m.id === agentId ? { ...m, content: lastContent } : m)
+                      return [...prev, { id: agentId, role: 'agent', content: lastContent, timestamp: agentTs }]
+                    })
+                  } else if (ce.type === 'error') {
+                    setMessages(prev => [...prev, { id: uid(), role: 'error', content: ce.content ?? 'Error del agente', timestamp: now() }])
+                  }
                 }
+                // Fallback: if the SSE loop ended without any answer content
+                if (!lastContent.trim()) {
+                  setMessages(prev => [...prev, {
+                    id: uid(), role: 'error',
+                    content: 'La IA no devolvió respuesta. El contexto puede ser demasiado grande — intenta con un Plan de análisis específico o un rango de tiempo menor.',
+                    timestamp: now(),
+                  }])
+                }
+              } catch (err) {
+                setMessages(prev => [...prev, { id: uid(), role: 'error', content: String(err), timestamp: now() }])
               }
               setStatus(s => ({ ...s, state: 'ready', label: 'CONECTADO' }))
-            }).catch(err => {
-              setMessages(prev => [...prev, { id: uid(), role: 'error', content: String(err), timestamp: now() }])
-              setStatus(s => ({ ...s, state: 'ready', label: 'CONECTADO' }))
-            })
+            })()
           }, 200)
         } else if (e.type === 'scan_error') {
           setScanState(s => ({ ...s, phase: 'error', error: e.msg as string }))
