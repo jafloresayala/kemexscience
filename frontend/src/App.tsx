@@ -1071,6 +1071,211 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
   )
 }
 
+// ─── Docs Modal ──────────────────────────────────────────────────────────────
+const DOCS_SECTIONS = [
+  {
+    id: 'intro',
+    icon: '⬡',
+    title: '¿Qué es KEMEX Data Science?',
+    content: `Es tu asistente inteligente de planta. Puedes hacerle preguntas en español sobre los datos de tus máquinas y sensores en tiempo real, y él se encarga de buscar, analizar y explicarte todo.
+
+No necesitas saber programación ni conocer los nombres técnicos de los tags. Solo escribe lo que quieres saber, igual que si le hablaras a un compañero de trabajo.`,
+    examples: [
+      { label: 'Pregunta libre', text: '¿Cómo estuvo la temperatura de la Reflow Oven L1 ayer?' },
+      { label: 'Diagnóstico', text: 'Dime si hay alguna máquina con señales irregulares esta semana' },
+      { label: 'Comparación', text: 'Compara la velocidad de las Paste Printers del turno matutino vs vespertino' },
+    ],
+  },
+  {
+    id: 'chat',
+    icon: '💬',
+    title: 'Cómo usar el Chat',
+    content: `El chat es la forma principal de interactuar con la IA. Escribe tu pregunta en el cuadro de texto en la parte inferior y presiona ENTER o el botón ENVIAR.
+
+La IA puede:
+• Obtener datos históricos de cualquier sensor o tag
+• Calcular promedios, máximos, mínimos y tendencias
+• Generar gráficas automáticamente
+• Detectar anomalías o comportamientos fuera de rango
+• Responder preguntas de diagnóstico de equipos
+
+Si la IA necesita buscar datos, verás los nodos del árbol PI parpadeando mientras trabaja.`,
+    examples: [
+      { label: 'Datos históricos', text: 'Muéstrame los valores de temperatura de la Reflow Oven de ayer entre 8am y 4pm' },
+      { label: 'Gráfica', text: 'Genera una gráfica de la presión del squeegee en la línea 2 de los últimos 3 días' },
+      { label: 'Detección de anomalías', text: '¿Algún sensor tuvo un flatline (señal plana) en las últimas 24 horas?' },
+    ],
+  },
+  {
+    id: 'tree',
+    icon: '⬡',
+    title: 'PI AF Tree — Vista Gráfica',
+    content: `El panel derecho muestra el árbol de activos de tu planta (PI AF Tree). Cada círculo es una máquina, línea o área.
+
+Cómo navegar:
+• Haz clic en un nodo para expandir sus hijos
+• Cuando un nodo ya está expandido y no tiene más hijos, aparece "◇ ver tags" — haz clic para ver los sensores (tags) de esa máquina
+• Los nodos en amarillo están siendo consultados por la IA
+• Los nodos en verde ya tienen datos cargados
+• Los diamantes morados (◇) son tags individuales (sensores)
+• Rueda del ratón para hacer zoom, arrastra para mover la vista
+• Doble clic en el fondo para recentrar la vista`,
+    examples: [
+      { label: 'Expandir árbol', text: 'Haz clic sobre "Linea 1 Left" para ver sus máquinas' },
+      { label: 'Ver sensores', text: 'Haz clic sobre "B2_L1L Paste Printer" (cuando muestre ◇ ver tags) para ver sus tags' },
+      { label: 'Pantalla completa', text: 'Presiona ⊞ en la esquina del panel para modo pantalla completa. Presiona Esc para salir.' },
+    ],
+  },
+  {
+    id: 'hierarchy',
+    icon: '☰',
+    title: 'PI AF Tree — Lista Jerárquica',
+    content: `La vista de lista muestra toda la jerarquía en forma de árbol de texto indentado. Es útil cuando quieres buscar visualmente una máquina específica sin navegar el gráfico.
+
+Cómo usarla:
+• Haz clic en el ícono ☰ en la cabecera del panel derecho
+• Los nodos con › aún no están cargados — haz clic para expandirlos
+• Los nodos con · ya están al nivel más profundo — haz clic para cargar sus tags
+• Los tags aparecen como ◇ con su unidad de medida (e.g. °C, PSI)
+• La selección se comparte con la vista gráfica`,
+    examples: [
+      { label: 'Cambiar vista', text: 'Haz clic en ☰ para ver la lista; haz clic en ⬡ para volver al gráfico' },
+      { label: 'Buscar máquina', text: 'Desplázate por la lista hasta encontrar la máquina y haz clic para expandirla' },
+    ],
+  },
+  {
+    id: 'context',
+    icon: '✦',
+    title: 'Seleccionar contexto para la IA',
+    content: `Puedes "apuntarle" a la IA a una máquina o sensor específico antes de hacer una pregunta. Esto le ayuda a entender exactamente de qué equipo estás hablando.
+
+Cómo hacerlo:
+• En la vista gráfica: cuando pases el cursor sobre un nodo, aparece un ícono + en la esquina superior izquierda — haz clic para seleccionarlo
+• En la vista de lista: haz clic sobre cualquier nodo o tag para seleccionarlo
+• Verás una pastilla verde en la parte inferior del chat con el nombre del elemento seleccionado
+• Al enviar un mensaje, la IA recibirá automáticamente la ruta completa de ese elemento
+• Haz clic en la pastilla o en × para deseleccionarlo`,
+    examples: [
+      { label: 'Seleccionar máquina', text: 'Selecciona "B2_L1L Paste Printer" y pregunta: ¿Cómo estuvo la presión ayer?' },
+      { label: 'Seleccionar tag', text: 'Selecciona un tag ◇ de temperatura y pregunta: ¿Estuvo dentro del rango normal esta semana?' },
+    ],
+  },
+  {
+    id: 'scan',
+    icon: '⬡',
+    title: 'Plant Health Scan — Diagnóstico de toda la planta',
+    content: `El botón SCAN en la barra superior lanza un análisis automático de toda la planta. La IA recorre todas las líneas y máquinas, recolecta datos recientes y genera un reporte de salud.
+
+Pasos:
+1. Haz clic en ⬡ SCAN
+2. (Opcional) Escribe un plan de análisis — por ejemplo: "Enfócate en anomalías de temperatura"
+3. Haz clic en INICIAR SCAN
+4. Espera a que el progreso llegue al 100%
+5. La IA analizará automáticamente los resultados y te dará un resumen
+
+Después del scan:
+• Aparece el botón 📊 DATOS para ver la tabla completa de valores recolectados
+• Puedes seguir haciendo preguntas al chat basadas en los datos del scan`,
+    examples: [
+      { label: 'Scan general', text: 'Haz clic en ⬡ SCAN → INICIAR SCAN (sin plan) para un análisis completo' },
+      { label: 'Scan enfocado', text: 'Escribe "Solo Reflow Ovens — busca perfiles de temperatura fuera de rango" antes de iniciar' },
+    ],
+  },
+  {
+    id: 'tips',
+    icon: '💡',
+    title: 'Consejos y buenas prácticas',
+    content: `• Sé específico con las fechas: en lugar de "ayer", prueba "el 10 de mayo entre 6am y 2pm"
+• Puedes pedir gráficas directamente: "grafica la temperatura de…"
+• Si la respuesta fue muy larga, pregunta: "resume lo más importante"
+• Puedes ejecutar código Python que la IA genere — aparece el botón ▶ EJECUTAR bajo el bloque de código
+• El tema visual se cambia con ○ LIGHT / ◑ DARK en la barra superior
+• Usa 🗑 LIMPIAR para borrar archivos de scans anteriores y liberar espacio`,
+    examples: [
+      { label: 'Con fecha exacta', text: 'Dame los datos de vibración del 8 de mayo de 7am a 3pm' },
+      { label: 'Pedir resumen', text: 'De todo lo que analizaste, ¿cuál es la máquina con más riesgo?' },
+    ],
+  },
+]
+
+function DocsModal({ onClose }: { onClose: () => void }) {
+  const [activeId, setActiveId] = useState('intro')
+  const section = DOCS_SECTIONS.find(s => s.id === activeId) ?? DOCS_SECTIONS[0]
+
+  // Close on Escape
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="docs-overlay" onClick={onClose}>
+      <div className="docs-modal" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="docs-hdr">
+          <span className="docs-hdr-logo">⬡</span>
+          <span className="docs-hdr-title">DOCUMENTACIÓN</span>
+          <span className="docs-hdr-sub">Guía de uso — KEMEX Data Science</span>
+          <button className="docs-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="docs-body">
+          {/* Sidebar nav */}
+          <nav className="docs-nav">
+            {DOCS_SECTIONS.map(s => (
+              <button
+                key={s.id}
+                className={`docs-nav-item${s.id === activeId ? ' docs-nav-active' : ''}`}
+                onClick={() => setActiveId(s.id)}
+              >
+                <span className="docs-nav-icon">{s.icon}</span>
+                <span className="docs-nav-label">{s.title}</span>
+              </button>
+            ))}
+          </nav>
+
+          {/* Content */}
+          <div className="docs-content">
+            <div className="docs-section-title">
+              <span className="docs-section-icon">{section.icon}</span>
+              {section.title}
+            </div>
+
+            {/* Description */}
+            <div className="docs-text">
+              {section.content.split('\n').map((line, i) => (
+                line.trim() === '' ? <div key={i} className="docs-gap" /> :
+                line.startsWith('•') ? <div key={i} className="docs-bullet">{line}</div> :
+                <div key={i} className="docs-p">{line}</div>
+              ))}
+            </div>
+
+            {/* Examples */}
+            {section.examples.length > 0 && (
+              <div className="docs-examples">
+                <div className="docs-ex-title">Ejemplos</div>
+                {section.examples.map((ex, i) => (
+                  <div key={i} className="docs-ex-card">
+                    <div className="docs-ex-label">{ex.label}</div>
+                    <div className="docs-ex-text">❯ {ex.text}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="docs-footer">
+          <span>Presiona <kbd>Esc</kbd> para cerrar</span>
+          <span className="docs-footer-brand">⬡ KEMEX Data Science — Kimball Electronics</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Plan Modal ───────────────────────────────────────────────────────────────
 const PLAN_EXAMPLES = [
   'Enfócate en las Reflow Ovens — analiza temperaturas y perfiles térmicos',
@@ -1408,6 +1613,7 @@ export default function App() {
   const [tableOpen, setTableOpen] = useState(false)
   const [planOpen, setPlanOpen] = useState(false)
   const [activePlan, setActivePlan] = useState('')
+  const [docsOpen, setDocsOpen] = useState(false)
 
   // ── Escape key closes lightbox ────────────────────────────────────────────
   useEffect(() => {
@@ -1914,6 +2120,9 @@ export default function App() {
         <button className="theme-btn" onClick={() => setLightMode(l => !l)} title="Cambiar tema">
           {lightMode ? '◑ DARK' : '○ LIGHT'}
         </button>
+        <button className="docs-btn" onClick={() => setDocsOpen(true)} title="Documentación y guía de uso">
+          📖 DOCS
+        </button>
         <button
           className={`cache-btn${cleaning ? ' cache-btn-cleaning' : ''}`}
           onClick={refreshCache}
@@ -2011,6 +2220,11 @@ export default function App() {
       {/* Scan Data Table */}
       {tableOpen && (
         <ScanDataTable onClose={() => setTableOpen(false)} />
+      )}
+
+      {/* Docs Modal */}
+      {docsOpen && (
+        <DocsModal onClose={() => setDocsOpen(false)} />
       )}
 
       {/* Lightbox */}
