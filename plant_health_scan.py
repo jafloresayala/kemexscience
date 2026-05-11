@@ -518,13 +518,37 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
     line_scores = {ln: (_line_anomaly_score(ms), _line_total_score(ms)) for ln, ms in by_line.items()}
     sorted_lines = sorted(line_scores.items(), key=lambda x: x[1][0] + x[1][1] * 0.1, reverse=True)
 
-    # Con plan: todas las líneas completas (el usuario puede pedir cualquiera).
-    # Sin plan: solo top 5 para mantener el prompt compacto.
-    lines_to_use = sorted_lines if plan.strip() else sorted_lines[:5]
+    # Siempre todas las líneas.
+    # Con plan: detalle completo de todas.
+    # Sin plan: detalle completo del top 5 por anomalías + resumen compacto del resto.
+    TOP_DETAIL = 5
 
-    def _build_line_entry(ln: str, anomaly_score: float, total_score: float) -> dict:
+    def _build_line_entry(ln: str, anomaly_score: float, total_score: float, detail: bool) -> dict:
         machines = sorted(by_line[ln], key=lambda m: m.issue_score, reverse=True)
-        # Con plan: todas las máquinas; sin plan: top 6
+
+        # Resumen compacto (para líneas fuera del top en modo sin plan)
+        if not detail:
+            return {
+                "line": ln,
+                "anomaly_score": round(anomaly_score, 1),
+                "machines_total": len(machines),
+                "machines_with_anomalies": sum(
+                    1 for m in machines
+                    if any(t.issues and "NO_DATA" not in t.issues for t in m.tag_details)
+                ),
+                "dominant_issues": dict(
+                    Counter(
+                        i
+                        for m in machines
+                        for t in m.tag_details
+                        for i in t.issues
+                        if i != "NO_DATA"
+                    ).most_common(3)
+                ),
+                "detail": "compact — solicita análisis de esta línea para ver detalle completo",
+            }
+
+        # Detalle completo
         maq_pool = machines if plan.strip() else machines[:6]
         maq_list = []
         for m in maq_pool:
@@ -569,10 +593,10 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
             "machines": maq_list,
         }
 
-    lines_summary = [
-        _build_line_entry(ln, anomaly_score, total_score)
-        for ln, (anomaly_score, total_score) in lines_to_use
-    ]
+    lines_summary = []
+    for rank, (ln, (anomaly_score, total_score)) in enumerate(sorted_lines):
+        use_detail = plan.strip() or (rank < TOP_DETAIL)
+        lines_summary.append(_build_line_entry(ln, anomaly_score, total_score, detail=use_detail))
 
     # Resumen global de tipos de issues en toda la planta
     global_issues: Counter = Counter()
@@ -597,7 +621,7 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
             "OK": "Tag con datos normales, sin anomalías detectadas.",
             "score": "issue_score = FLATLINE/SPIKE × 1.5  +  NO_DATA × 2  +  ERROR × 3. Mayor score = mayor urgencia.",
         },
-        # Con plan: todas las líneas. Sin plan: top 5 ordenadas por anomalías.
+        # Todas las líneas: top 5 con detalle completo, resto con resumen compacto.
         "lines_data": lines_summary,
     }
 
@@ -643,6 +667,7 @@ Si el mismo tipo de anomalía aparece en múltiples líneas (ej: varios flatline
 
 IMPORTANTE:
 - Usa los nombres exactos de los tags del JSON (campo `attr`) en tu análisis
+- El campo `lines_data` contiene TODAS las líneas de la planta. Las primeras 5 tienen detalle completo de máquinas y tags; el resto tienen un resumen compacto (`"detail": "compact"`). Menciona TODAS las líneas en tu análisis — incluso las que solo tienen resumen.
 - NO menciones los tags NO_DATA individualmente — solo referencia el conteo cuando sea relevante para el contexto
 - Enfócate en los tags con FLATLINE y SPIKE ya que son los que tienen datos reales con anomalías
 - Si una máquina tiene 0 tags con anomalías (solo NO_DATA), indícalo brevemente y pasa a la siguiente
