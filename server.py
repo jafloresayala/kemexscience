@@ -173,10 +173,40 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 @app.get("/api/status")
 def status() -> dict:
     model = os.getenv("MODEL_DEPLOYMENT_NAME", "—")
+    project_dir = Path(__file__).parent
+    scan_files = list(project_dir.glob("health_scan_*.json"))
     return {
         "ready": _state["ready"],
         "error": _state.get("error"),
         "model": model,
+        "cache": {
+            "status": "ready",
+            "scan_files": len(scan_files),
+        },
+    }
+
+
+@app.post("/api/cache/refresh")
+def cache_refresh() -> dict:
+    """
+    Elimina todos los archivos health_scan_*.json del directorio del proyecto.
+    Antes se reservó para reconstruir caché AF (nunca implementado); ahora
+    limpia los archivos de resultados de escaneo.
+    """
+    project_dir = Path(__file__).parent
+    scan_files = list(project_dir.glob("health_scan_*.json"))
+    deleted = []
+    errors = []
+    for f in scan_files:
+        try:
+            f.unlink()
+            deleted.append(f.name)
+        except Exception as exc:
+            errors.append(f"{f.name}: {exc}")
+    return {
+        "deleted": len(deleted),
+        "files": deleted,
+        "errors": errors,
     }
 
 

@@ -999,12 +999,13 @@ export default function App() {
         const res  = await fetch('/api/status')
         const data = await res.json() as {
           ready: boolean; error?: string; model?: string
-          cache?: { status: string; elements?: number }
+          cache?: { status: string; scan_files?: number }
         }
 
-        const cacheInfo = data.cache?.status === 'ready'
-          ? `cache: ${data.cache.elements ?? 0} elementos`
-          : `cache: ${data.cache?.status ?? '—'}`
+        const scanFileCount = data.cache?.scan_files ?? 0
+        const cacheInfo = scanFileCount > 0
+          ? `${scanFileCount} scan${scanFileCount > 1 ? 's' : ''} guardado${scanFileCount > 1 ? 's' : ''}`
+          : 'sin scans'
 
         setStatus(s => {
           const busy = s.state === 'thinking' || s.state === 'executing'
@@ -1214,10 +1215,28 @@ export default function App() {
     }
   }, [scanState.phase])
 
-  // ── Cache refresh ──────────────────────────────────────────────────────────
+  // ── Cache refresh (elimina archivos health_scan_*.json) ──────────────────
   const refreshCache = async () => {
-    await fetch('/api/cache/refresh', { method: 'POST' })
-    setStatus(s => ({ ...s, cacheInfo: 'cache: construyendo…' }))
+    const countMatch = status.cacheInfo.match(/^(\d+)/)
+    const scanCount = countMatch ? parseInt(countMatch[1]) : 0
+    const confirmMsg = scanCount > 0
+      ? `¿Eliminar ${scanCount} archivo${scanCount > 1 ? 's' : ''} de escaneo? Esta acción no se puede deshacer.`
+      : '¿Limpiar archivos de escaneo guardados?'
+    if (!window.confirm(confirmMsg)) return
+
+    try {
+      const res = await fetch('/api/cache/refresh', { method: 'POST' })
+      const data = await res.json() as { deleted: number; errors: string[] }
+      const msg = data.deleted > 0
+        ? `✔ ${data.deleted} eliminado${data.deleted > 1 ? 's' : ''}`
+        : 'sin scans'
+      setStatus(s => ({ ...s, cacheInfo: msg }))
+      // Cerrar tabla si estaba abierta — los scans ya no existen
+      setTableOpen(false)
+      setScanState(s => ({ ...s, phase: 'idle', summary: null }))
+    } catch {
+      setStatus(s => ({ ...s, cacheInfo: 'error al eliminar' }))
+    }
   }
 
   // ── Key handler ────────────────────────────────────────────────────────────
@@ -1274,7 +1293,7 @@ export default function App() {
         <button className="theme-btn" onClick={() => setLightMode(l => !l)} title="Cambiar tema">
           {lightMode ? '◑ DARK' : '○ LIGHT'}
         </button>
-        <button className="cache-btn" onClick={refreshCache} title="Reconstruir caché del árbol AF">↺ CACHE</button>
+        <button className="cache-btn" onClick={refreshCache} title="Eliminar archivos de escaneo guardados (health_scan_*.json)">🗑 LIMPIAR</button>
       </div>
 
       {/* Main split */}
