@@ -1658,6 +1658,12 @@ export default function App() {
   const [lightMode, setLightMode] = useState(false)
   const [zoomedPlot, setZoomedPlot] = useState<string | null>(null)
   const [ctxNode, setCtxNode] = useState<AFNode | null>(null)
+  // Scan context pill: when active the last scan prompt is injected once per session
+  const [scanPill, setScanPill] = useState<{
+    active: boolean       // is the pill toggled on?
+    scanId: string | null // which scan_id is attached
+    injected: boolean     // has the prompt been prepended in this session already?
+  }>({ active: false, scanId: null, injected: false })
   const [scanState, setScanState] = useState<ScanState>({
     phase: 'idle', pct: 0, log: [], summary: null, error: null,
   })
@@ -1907,6 +1913,8 @@ export default function App() {
 
     const iv = setInterval(poll, 2000)
     poll()
+    // Reset conversation on every page load so old scan data doesn't bleed through
+    fetch('/api/conversation/reset', { method: 'POST' }).catch(() => { /* non-critical */ })
     return () => clearInterval(iv)
   }, [])
 
@@ -1927,11 +1935,24 @@ export default function App() {
         : `[Nodo seleccionado en PI AF Tree: "${ctxNode.name}" — Ruta completa: ${ctxNode.path}]\n\n${text}`
       : text
 
+    // Scan context pill: inject the scan prompt once per active session (first message only)
+    let finalMessage = messageToSend
+    if (scanPill.active && scanPill.scanId && !scanPill.injected) {
+      try {
+        const pRes = await fetch(`/api/health-scan/prompt/${scanPill.scanId}`)
+        if (pRes.ok) {
+          const { prompt } = await pRes.json() as { prompt: string }
+          finalMessage = prompt + '\n\n---\n\n' + messageToSend
+          setScanPill(p => ({ ...p, injected: true }))
+        }
+      } catch { /* non-critical, send without scan context */ }
+    }
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageToSend }),
+        body: JSON.stringify({ message: finalMessage }),
       })
 
       let lastAnswerContent = ''
@@ -1971,7 +1992,45 @@ export default function App() {
 
     setStatus(s => ({ ...s, state: 'ready', label: 'CONECTADO' }))
     setTimeout(() => inputRef.current?.focus(), 50)
-  }, [input, status.state])
+  }, [input, status.state, ctxNode, scanPill])
+
+  // ── Scan context pill toggle ───────────────────────────────────────────────
+  const toggleScanPill = useCallback(async () => {
+    if (scanPill.active) {
+      // Deactivate: reset conversation so AI forgets scan data
+      setScanPill({ active: false, scanId: null, injected: false })
+      await fetch('/api/conversation/reset', { method: 'POST' }).catch(() => {})
+      setMessages(prev => [...prev, {
+        id: uid(), role: 'system',
+        content: '🔄 Contexto de scan desactivado. Nueva sesión iniciada — el agente ya no tiene acceso al último scan.',
+        timestamp: now(),
+      }])
+    } else {
+      // Activate: find most recent scan, reset conversation, mark ready for injection
+      try {
+        const res = await fetch('/api/health-scan/list')
+        const data = await res.json() as { scans: { scan_id: string }[] }
+        const latest = data.scans?.[0]
+        if (!latest) {
+          setMessages(prev => [...prev, {
+            id: uid(), role: 'system',
+            content: '⚠️ No hay ningún scan disponible. Ejecuta un Plant Health Scan primero.',
+            timestamp: now(),
+          }])
+          return
+        }
+        await fetch('/api/conversation/reset', { method: 'POST' }).catch(() => {})
+        setScanPill({ active: true, scanId: latest.scan_id, injected: false })
+        setMessages(prev => [...prev, {
+          id: uid(), role: 'system',
+          content: `📊 Contexto de scan activado (Scan ${latest.scan_id}). Nueva sesión iniciada — el agente recibirá los datos del scan con tu próximo mensaje.`,
+          timestamp: now(),
+        }])
+      } catch (err) {
+        setMessages(prev => [...prev, { id: uid(), role: 'error', content: `No se pudo obtener el scan: ${String(err)}`, timestamp: now() }])
+      }
+    }
+  }, [scanPill.active])
 
   // ── Execute Python ─────────────────────────────────────────────────────────
   const executeCode = useCallback(async (code: string) => {
@@ -2037,6 +2096,11 @@ export default function App() {
         } else if (e.type === 'scan_done') {
           const summary = e.summary as ScanDone
           setScanState(s => ({ ...s, phase: 'done', pct: 100, summary }))
+          // Keep track of latest scan_id so the scan pill always references the freshest scan
+          setScanPill(p => p.active
+            ? { active: true, scanId: summary.scan_id, injected: false }
+            : p
+          )
           // Enviar prompt al agente automáticamente
           setMessages(prev => [...prev, {
             id: uid(), role: 'system',
@@ -2243,14 +2307,44 @@ export default function App() {
       {/* AI Pet + Input */}
       <div className="input-zone">
         <AIPet state={status.state} lightMode={lightMode} />
-        {/* Context node pill */}
-        {ctxNode && (
+        {/* Context pills row (scan ctx + PI node) */}
+        {(scanPill.active || ctxNode) && (
           <div className="ctx-pill-row">
-            <button className="ctx-pill" onClick={() => setCtxNode(null)}
-              title="Clic para deseleccionar">
-              <span className="ctx-pill-plus">+</span>
-              <span className="ctx-pill-label">{nodeDisplayLabel(ctxNode)}</span>
-              <span className="ctx-pill-x">×</span>
+            {/* Scan context pill */}
+            {scanPill.active && (
+              <button
+                className={`ctx-pill scan-ctx-pill${scanPill.injected ? ' scan-ctx-injected' : ''}`}
+                onClick={toggleScanPill}
+                title={scanPill.injected ? 'Contexto de scan enviado — clic para desactivar' : 'Contexto de scan listo para enviar — clic para desactivar'}
+              >
+                <span className="ctx-pill-plus">📊</span>
+                <span className="ctx-pill-label">
+                  {scanPill.injected ? `Scan ${scanPill.scanId} activo` : `+ Scan ${scanPill.scanId}`}
+                </span>
+                <span className="ctx-pill-x">×</span>
+              </button>
+            )}
+            {/* PI node pill */}
+            {ctxNode && (
+              <button className="ctx-pill" onClick={() => setCtxNode(null)}
+                title="Clic para deseleccionar">
+                <span className="ctx-pill-plus">+</span>
+                <span className="ctx-pill-label">{nodeDisplayLabel(ctxNode)}</span>
+                <span className="ctx-pill-x">×</span>
+              </button>
+            )}
+          </div>
+        )}
+        {/* Scan context pill when no ctx-pill-row (standalone row) */}
+        {!scanPill.active && !ctxNode && (
+          <div className="ctx-pill-row scan-pill-add-row">
+            <button
+              className="scan-ctx-add-btn"
+              onClick={toggleScanPill}
+              title="Adjuntar el último Plant Health Scan como contexto"
+              disabled={busy}
+            >
+              <span>+</span> Adjuntar último scan
             </button>
           </div>
         )}

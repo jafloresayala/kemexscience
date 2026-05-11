@@ -1710,3 +1710,57 @@ body {
   background: rgba(0,120,40,0.15);
   border-color: rgba(0,120,40,0.6);
 }
+
+/* ── Scan context pill (📊) ──────────────────────────────────────────────── */
+.scan-ctx-pill {
+  background: rgba(0, 212, 255, 0.08);
+  border-color: rgba(0, 212, 255, 0.45);
+  color: var(--cyan);
+}
+.scan-ctx-pill:hover {
+  background: rgba(0, 212, 255, 0.15);
+  border-color: rgba(0, 212, 255, 0.75);
+}
+/* After injection the pill shows a subtle green tint = context sent */
+.scan-ctx-injected {
+  background: rgba(0, 212, 255, 0.13);
+  border-color: rgba(0, 212, 255, 0.65);
+  box-shadow: 0 0 6px rgba(0, 212, 255, 0.2);
+}
+
+/* The small "+ Adjuntar último scan" ghost button shown when pill is not active */
+.scan-pill-add-row {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.scan-pill-add-row:hover { opacity: 1; }
+
+.scan-ctx-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px dashed rgba(0, 212, 255, 0.3);
+  color: var(--cyan);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.scan-ctx-add-btn:hover:not(:disabled) {
+  background: rgba(0, 212, 255, 0.07);
+  border-color: rgba(0, 212, 255, 0.55);
+  border-style: solid;
+}
+.scan-ctx-add-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.light .scan-ctx-pill,
+.light .scan-ctx-add-btn {
+  color: #0077aa;
+  border-color: rgba(0,119,170,0.4);
+  background: rgba(0,119,170,0.07);
+}

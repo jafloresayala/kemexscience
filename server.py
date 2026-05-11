@@ -275,6 +275,24 @@ def cache_refresh() -> dict:
     }
 
 
+@app.post("/api/conversation/reset")
+def conversation_reset() -> dict:
+    """
+    Crea una nueva conversación en Azure AI Foundry y la reemplaza en el estado global.
+    El frontend llama a este endpoint:
+      - Al cargar la página (para evitar que scans anteriores contaminen la sesión)
+      - Al activar o desactivar el pill de contexto de scan
+    """
+    if not _state["ready"]:
+        return {"ok": False, "reason": "agent not ready"}
+    try:
+        new_conv = _state["openai_client"].conversations.create()
+        _state["conversation"] = new_conv
+        return {"ok": True, "conversation_id": new_conv.id}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
 @app.post("/api/execute")
 def execute_code(req: ExecuteRequest) -> dict:
     """
