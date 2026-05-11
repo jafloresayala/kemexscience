@@ -458,73 +458,185 @@ def _result_to_dict(r: ScanResult) -> dict:
     }
 
 
+def _tag_detail_for_prompt(t: TagHealth) -> dict:
+    """Serializa un TagHealth para el prompt del LLM — solo lo relevante."""
+    d: dict = {"tag": t.tag_name, "attr": t.attribute_name}
+    if "NO_DATA" in t.issues:
+        d["status"] = "NO_DATA"
+        return d
+    d["status"] = ", ".join(t.issues) if t.issues else "OK"
+    if t.count is not None:
+        d["pts"] = t.count
+    if t.avg is not None:
+        d["avg"] = t.avg
+    if t.min_val is not None and t.max_val is not None:
+        d["range"] = [t.min_val, t.max_val]
+    if t.stdev is not None:
+        d["stdev"] = t.stdev
+    if t.error:
+        d["error"] = t.error
+    return d
+
+
 def build_ai_prompt(result: ScanResult) -> str:
     """
-    Construye un prompt compacto para el LLM con los datos clave del escaneo.
-    Evita saturar el contexto con valores raw; solo manda estadísticas + issues.
+    Construye un prompt compacto pero específico para el LLM.
+
+    Estrategia:
+    - Para las top 5 líneas: enviar los tags REALES con anomalías (FLATLINE / SPIKE / ERROR),
+      separados de los NO_DATA.
+    - Siempre incluir algunos tags OK como referencia de qué SÍ está funcionando.
+    - NO_DATA se reporta solo en conteo — no saturar el prompt con lista completa.
+    - El prompt de instrucción es explícito: pedir nombres de tags, causas y acciones.
     """
     # Agrupar por línea
     by_line: dict[str, list[MachineHealth]] = {}
     for m in result.machines:
         by_line.setdefault(m.line_name, []).append(m)
 
-    # Top 5 líneas por score agregado
-    line_scores = {
-        ln: sum(m.issue_score for m in machines)
-        for ln, machines in by_line.items()
-    }
-    top5_lines = sorted(line_scores.items(), key=lambda x: x[1], reverse=True)[:5]
+    # Top 5 líneas por score EXCLUYENDO el peso de NO_DATA para no sesgar
+    # (queremos las líneas con más anomalías reales)
+    def _line_anomaly_score(machines: list[MachineHealth]) -> float:
+        return sum(
+            sum(1.5 for t in m.tag_details if t.issues and "NO_DATA" not in t.issues)
+            + (3 * m.tags_error)
+            for m in machines
+        )
+
+    def _line_total_score(machines: list[MachineHealth]) -> float:
+        return sum(m.issue_score for m in machines)
+
+    line_scores = {ln: (_line_anomaly_score(ms), _line_total_score(ms)) for ln, ms in by_line.items()}
+    top5_lines = sorted(line_scores.items(), key=lambda x: x[1][0] + x[1][1] * 0.1, reverse=True)[:5]
 
     lines_summary = []
-    for ln, score in top5_lines:
-        machines = by_line[ln]
-        machines.sort(key=lambda m: m.issue_score, reverse=True)
-        top_maq = machines[:5]
+    for ln, (anomaly_score, total_score) in top5_lines:
+        machines = sorted(by_line[ln], key=lambda m: m.issue_score, reverse=True)
+        top_maq = machines[:6]
         maq_list = []
         for m in top_maq:
-            issues_summary = []
-            if m.tags_error:
-                issues_summary.append(f"{m.tags_error} tags con error")
-            if m.tags_no_data:
-                issues_summary.append(f"{m.tags_no_data} tags sin datos")
-            if m.tags_with_issues:
-                issues_summary.append(f"{m.tags_with_issues} tags con anomalías (flatline/spike)")
-            maq_list.append({
+            # Tags con anomalías reales (flatline, spike, error) — nombres específicos
+            anomalous = [
+                _tag_detail_for_prompt(t)
+                for t in m.tag_details
+                if t.issues and "NO_DATA" not in t.issues
+            ]
+            # Tags OK — muestra hasta 3 para contexto
+            ok_tags = [
+                t.attribute_name or t.tag_name
+                for t in m.tag_details
+                if not t.issues and t.count and t.count > 0
+            ][:3]
+
+            maq_entry: dict = {
                 "machine": m.machine_name,
                 "score": round(m.issue_score, 1),
-                "issues": issues_summary,
                 "tags_scanned": m.tags_scanned,
-            })
+                "no_data_count": m.tags_no_data,   # solo conteo
+                "anomalous_tags": anomalous,        # lista con nombres y stats
+                "sample_ok_tags": ok_tags,          # contexto de lo que sí funciona
+            }
+            if m.scan_error:
+                maq_entry["api_error"] = m.scan_error
+            maq_list.append(maq_entry)
+
+        # Patrón dominante de la línea
+        all_issues: list[str] = []
+        for m in machines:
+            for t in m.tag_details:
+                all_issues.extend(i for i in t.issues if i != "NO_DATA")
+        from collections import Counter
+        issue_counts = Counter(all_issues)
+
         lines_summary.append({
             "line": ln,
-            "total_score": round(score, 1),
-            "machines": len(machines),
-            "top_problematic_machines": maq_list,
+            "anomaly_score": round(anomaly_score, 1),
+            "total_score": round(total_score, 1),
+            "machines_total": len(machines),
+            "machines_with_anomalies": sum(
+                1 for m in machines
+                if any(t.issues and "NO_DATA" not in t.issues for t in m.tag_details)
+            ),
+            "dominant_issues": dict(issue_counts.most_common(3)),
+            "top_machines": maq_list,
         })
+
+    # Resumen global de tipos de issues en toda la planta
+    global_issues: Counter = Counter()
+    for m in result.machines:
+        for t in m.tag_details:
+            for i in t.issues:
+                global_issues[i] += 1
 
     prompt_data = {
         "scan_id": result.scan_id,
-        "period": f"{result.from_dt} → {result.to_dt}",
-        "scope": {
-            "lines_scanned": result.lines_scanned,
-            "machines_scanned": result.machines_scanned,
-            "tags_scanned": result.tags_scanned,
+        "period": f"{result.from_dt} → {result.to_dt}  (últimas 24h)",
+        "plant_scope": {
+            "lines": result.lines_scanned,
+            "machines": result.machines_scanned,
+            "tags_total": result.tags_scanned,
+            "global_issue_counts": dict(global_issues.most_common()),
         },
-        "top5_lines_with_most_issues": lines_summary,
-        "note": (
-            "issue_score: error=3pts, no_data=2pts, flatline/spike=1.5pts/issue. "
-            "Los tags con FLATLINE tienen stdev<0.001 (valor constante, posible sensor detenido). "
-            "Los tags con SPIKE tienen rango>20x la media (posible lectura errónea). "
-            "Los tags con NO_DATA no devolvieron valores en el período."
-        ),
+        "legend": {
+            "FLATLINE": "Tag con stdev < 0.001 en 24h — el sensor no varió, posiblemente detenido o en valor fijo.",
+            "SPIKE": "Tag con rango (max-min) > 20× la media — lectura fuera de rango normal, posible falla de sensor o proceso.",
+            "NO_DATA": "La API no devolvió valores — el tag puede estar desconectado, no configurado, o la máquina estaba apagada.",
+            "OK": "Tag con datos normales, sin anomalías detectadas.",
+            "score": "issue_score = FLATLINE/SPIKE × 1.5  +  NO_DATA × 2  +  ERROR × 3. Mayor score = mayor urgencia.",
+        },
+        "top5_lines": lines_summary,
     }
 
+    instructions = """\
+Eres un ingeniero experto en manufactura electrónica SMT. Analiza los resultados del escaneo de salud de planta y proporciona un informe ejecutivo estructurado de la siguiente manera:
+
+---
+
+## 📊 TOP 5 Líneas con más problemas
+
+Para cada línea del top 5:
+- **Nombre de la línea** y su puntuación de anomalías
+- Lista de las **máquinas con problemas**, con:
+  - Nombre exacto de cada máquina
+  - Nombre exacto de cada TAG con anomalía (campo `attr` del JSON), junto con:
+    - Tipo de falla: FLATLINE o SPIKE
+    - Valores observados (avg, rango, stdev)
+    - **Qué significa esto en términos de proceso** (ej: "Squeegee Speed fijo en 0 → posible sensor de velocidad detenido o motor sin movimiento")
+    - **Acción recomendada** (ej: "Verificar encoder del squeegee, revisar alarmas activas en la máquina")
+- Si hay tags OK en la máquina, menciónalos brevemente para dar contexto
+
+---
+
+## 🏭 Diagnóstico Ejecutivo
+
+Sección de 6-10 puntos concretos con el siguiente formato para cada punto:
+> **[MÁQUINA / LÍNEA]** — **[TAG ESPECÍFICO]**: [Descripción del problema]. → **Acción**: [Qué hacer].
+
+Ejemplos del estilo esperado:
+> **Línea 1 Left / Paste Printer** — **Squeegee Speed (KP.SMT.L1L.PP.SqueegeeSpeed)**: Flatline en 0.0 durante 24h → posiblemente la máquina no produjo o el encoder no está enviando datos. → **Acción**: Verificar si la máquina estuvo en producción; si sí, revisar configuración del tag en PI.
+> **Línea 3 / Reflow Oven** — **Peak Temperature Zone 4 (KP.SMT.L3.RO.PeakTempZ4)**: SPIKE con rango 180-420°C (avg=240°C) → posible lectura errática del termopar en zona 4. → **Acción**: Calibrar termopar Z4, revisar historial de alarmas de temperatura.
+
+---
+
+## ⚠️ Patrones Sistémicos
+
+Si el mismo tipo de anomalía aparece en múltiples líneas (ej: varios flatlines del mismo tipo de tag), indica:
+- Qué tag/tipo de sensor está fallando en varias líneas
+- Si puede ser un problema de configuración global, mantenimiento preventivo pendiente, o problema de proceso
+- Recomendación de acción sistémica
+
+---
+
+IMPORTANTE:
+- Usa los nombres exactos de los tags del JSON (campo `attr`) en tu análisis
+- NO menciones los tags NO_DATA individualmente — solo referencia el conteo cuando sea relevante para el contexto
+- Enfócate en los tags con FLATLINE y SPIKE ya que son los que tienen datos reales con anomalías
+- Si una máquina tiene 0 tags con anomalías (solo NO_DATA), indícalo brevemente y pasa a la siguiente
+- Sé específico y accionable — el equipo de mantenimiento usará este reporte para tomar decisiones hoy
+"""
+
     return (
-        f"## Resultados del Plant Health Scan — últimas 24h\n\n"
-        f"```json\n{json.dumps(prompt_data, ensure_ascii=False, indent=2)}\n```\n\n"
-        "Con base en estos datos:\n"
-        "1. Dame el **TOP 5 de líneas con más problemas**, explicando qué tipo de fallas predominan.\n"
-        "2. Para cada línea del top 5, lista las **máquinas más problemáticas** y qué issues tienen.\n"
-        "3. Proporciona un **diagnóstico ejecutivo** breve (3-5 líneas) sobre el estado general de la planta.\n"
-        "4. Si algún patrón de falla se repite en varias líneas, señálalo como posible causa sistémica.\n"
+        f"{instructions}\n\n"
+        f"## Datos del escaneo\n\n"
+        f"```json\n{json.dumps(prompt_data, ensure_ascii=False, indent=2)}\n```\n"
     )

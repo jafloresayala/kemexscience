@@ -341,6 +341,136 @@ def health_scan_cancel() -> dict:
     return {"cancelled": False}
 
 
+@app.get("/api/health-scan/list")
+def health_scan_list() -> dict:
+    """Lista todos los archivos de scan disponibles en el directorio del proyecto."""
+    project_dir = Path(__file__).parent
+    files = sorted(project_dir.glob("health_scan_*.json"), reverse=True)
+    result = []
+    for f in files[:20]:  # max 20 más recientes
+        try:
+            with open(f, encoding="utf-8") as fh:
+                meta = json.load(fh)
+            result.append({
+                "scan_id": meta.get("scan_id", f.stem),
+                "started_at": meta.get("started_at"),
+                "finished_at": meta.get("finished_at"),
+                "from_dt": meta.get("from_dt"),
+                "to_dt": meta.get("to_dt"),
+                "lines": meta.get("lines_scanned", 0),
+                "machines": meta.get("machines_scanned", 0),
+                "tags": meta.get("tags_scanned", 0),
+                "file": f.name,
+            })
+        except Exception:
+            pass
+    return {"scans": result}
+
+
+@app.get("/api/health-scan/table/{scan_id}")
+def health_scan_table(
+    scan_id: str,
+    status_filter: str = "all",   # all | anomaly | ok | no_data
+    line_filter: str = "",
+    machine_filter: str = "",
+    page: int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Devuelve los datos del scan como filas planas (DataFrame-style) con filtros y paginación.
+    Cada fila = un tag de una máquina.
+    """
+    # Validar scan_id para evitar path traversal
+    import re as _re
+    if not _re.match(r'^[0-9_]+$', scan_id):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="scan_id inválido")
+
+    project_dir = Path(__file__).parent
+    scan_file = project_dir / f"health_scan_{scan_id}.json"
+    if not scan_file.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Scan no encontrado")
+
+    with open(scan_file, encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    # Construir filas planas
+    rows = []
+    for machine in data.get("machines", []):
+        for tag in machine.get("tag_details", []):
+            issues = tag.get("issues", [])
+            if not issues:
+                row_status = "OK"
+            elif issues == ["NO_DATA"]:
+                row_status = "NO_DATA"
+            else:
+                row_status = ", ".join(i for i in issues if i != "NO_DATA")
+                if "NO_DATA" in issues:
+                    row_status += " + NO_DATA"
+
+            rows.append({
+                "line": machine["line_name"],
+                "machine": machine["machine_name"],
+                "attribute": tag.get("attribute_name") or tag.get("tag_name", ""),
+                "tag": tag.get("tag_name", ""),
+                "status": row_status,
+                "count": tag.get("count", 0),
+                "avg": tag.get("avg"),
+                "min": tag.get("min"),
+                "max": tag.get("max"),
+                "stdev": tag.get("stdev"),
+                "issue_score": machine.get("issue_score", 0),
+            })
+
+    # Filtrar
+    if status_filter == "anomaly":
+        rows = [r for r in rows if r["status"] not in ("OK", "NO_DATA")]
+    elif status_filter == "ok":
+        rows = [r for r in rows if r["status"] == "OK"]
+    elif status_filter == "no_data":
+        rows = [r for r in rows if r["status"] == "NO_DATA"]
+
+    if line_filter:
+        lf = line_filter.lower()
+        rows = [r for r in rows if lf in r["line"].lower()]
+
+    if machine_filter:
+        mf = machine_filter.lower()
+        rows = [r for r in rows if mf in r["machine"].lower()]
+
+    # Ordenar: anomalías primero, luego por línea + máquina
+    status_order = {"FLATLINE": 0, "SPIKE": 1, "FLATLINE, SPIKE": 0, "NO_DATA": 3, "OK": 4}
+    rows.sort(key=lambda r: (status_order.get(r["status"], 2), r["line"], r["machine"]))
+
+    total = len(rows)
+    start = (page - 1) * page_size
+    page_rows = rows[start:start + page_size]
+
+    # Lista de líneas y máquinas únicas para los filtros del frontend
+    all_lines = sorted({r["line"] for r in rows})
+    all_machines = sorted({r["machine"] for r in rows})
+
+    return {
+        "scan_id": scan_id,
+        "period": f"{data.get('from_dt', '')} → {data.get('to_dt', '')}",
+        "total_rows": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": max(1, (total + page_size - 1) // page_size),
+        "rows": page_rows,
+        "filters": {
+            "lines": all_lines,
+            "machines": all_machines,
+        },
+        "summary": {
+            "ok": sum(1 for r in rows if r["status"] == "OK"),
+            "no_data": sum(1 for r in rows if r["status"] == "NO_DATA"),
+            "anomaly": sum(1 for r in rows if r["status"] not in ("OK", "NO_DATA")),
+        },
+    }
+
+
 # ─── Servir frontend React (build estático) ───────────────────────────────────
 _dist = Path(__file__).parent / "frontend" / "dist"
 if _dist.exists():

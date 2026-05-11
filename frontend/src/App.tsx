@@ -729,6 +729,216 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
   )
 }
 
+// ─── Scan Data Table ──────────────────────────────────────────────────────────
+interface TableRow {
+  line: string; machine: string; attribute: string; tag: string
+  status: string; count: number; avg: number | null
+  min: number | null; max: number | null; stdev: number | null
+}
+interface TableData {
+  scan_id: string; period: string; total_rows: number
+  page: number; pages: number; rows: TableRow[]
+  filters: { lines: string[]; machines: string[] }
+  summary: { ok: number; no_data: number; anomaly: number }
+}
+interface ScanMeta {
+  scan_id: string; started_at: string; lines: number; machines: number; tags: number
+}
+
+function ScanDataTable({ onClose }: { onClose: () => void }) {
+  const [scanList, setScanList]     = useState<ScanMeta[]>([])
+  const [selectedId, setSelectedId] = useState<string>('')
+  const [data, setData]             = useState<TableData | null>(null)
+  const [loading, setLoading]       = useState(false)
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [lineFilter, setLineFilter]     = useState<string>('')
+  const [machineFilter, setMachineFilter] = useState<string>('')
+  const [page, setPage]             = useState(1)
+  const [searchText, setSearchText] = useState('')
+
+  // Cargar lista de scans al montar
+  useEffect(() => {
+    fetch('/api/health-scan/list').then(r => r.json()).then((d: { scans: ScanMeta[] }) => {
+      setScanList(d.scans ?? [])
+      if (d.scans?.length) setSelectedId(d.scans[0].scan_id)
+    }).catch(() => {})
+  }, [])
+
+  // Cargar tabla cuando cambia selección/filtros/página
+  useEffect(() => {
+    if (!selectedId) return
+    setLoading(true)
+    const params = new URLSearchParams({
+      status_filter: statusFilter,
+      line_filter: lineFilter,
+      machine_filter: machineFilter,
+      page: String(page),
+      page_size: '100',
+    })
+    fetch(`/api/health-scan/table/${selectedId}?${params}`)
+      .then(r => r.json())
+      .then((d: TableData) => { setData(d); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [selectedId, statusFilter, lineFilter, machineFilter, page])
+
+  // Reset page on filter change
+  useEffect(() => { setPage(1) }, [statusFilter, lineFilter, machineFilter, selectedId])
+
+  const statusColor: Record<string, string> = {
+    'OK': 'var(--green)',
+    'NO_DATA': 'var(--dim)',
+    'FLATLINE': 'var(--yellow)',
+    'SPIKE': 'var(--red)',
+  }
+  function getStatusColor(s: string): string {
+    if (s === 'OK') return 'var(--green)'
+    if (s === 'NO_DATA') return 'var(--dim)'
+    if (s.includes('FLATLINE') && s.includes('SPIKE')) return 'var(--red)'
+    if (s.includes('FLATLINE')) return 'var(--yellow)'
+    if (s.includes('SPIKE')) return 'var(--red)'
+    return 'var(--cyan)'
+  }
+  function statusIcon(s: string): string {
+    if (s === 'OK') return '✓'
+    if (s === 'NO_DATA') return '–'
+    if (s.includes('SPIKE')) return '⚡'
+    if (s.includes('FLATLINE')) return '━'
+    return '?'
+  }
+
+  const visibleRows = searchText
+    ? (data?.rows ?? []).filter(r =>
+        r.attribute.toLowerCase().includes(searchText.toLowerCase()) ||
+        r.tag.toLowerCase().includes(searchText.toLowerCase()) ||
+        r.machine.toLowerCase().includes(searchText.toLowerCase())
+      )
+    : (data?.rows ?? [])
+
+  return (
+    <div className="dt-overlay" onClick={onClose}>
+      <div className="dt-panel" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="dt-hdr">
+          <span className="dt-title">📋 DATOS DEL ESCANEO</span>
+          <span className="dt-period">{data?.period ?? '—'}</span>
+          <button className="dt-close" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Toolbar */}
+        <div className="dt-toolbar">
+          {/* Selector de scan */}
+          <select
+            className="dt-select"
+            value={selectedId}
+            onChange={e => setSelectedId(e.target.value)}
+          >
+            {scanList.map(s => (
+              <option key={s.scan_id} value={s.scan_id}>
+                {s.scan_id}  ({s.machines} máq, {s.tags} tags)
+              </option>
+            ))}
+          </select>
+
+          {/* Filtro de estado */}
+          <div className="dt-filter-group">
+            {(['all','anomaly','ok','no_data'] as const).map(f => (
+              <button
+                key={f}
+                className={`dt-filter-btn${statusFilter === f ? ' active' : ''}`}
+                onClick={() => setStatusFilter(f)}
+              >
+                {f === 'all' ? `TODOS (${(data?.summary.ok ?? 0) + (data?.summary.no_data ?? 0) + (data?.summary.anomaly ?? 0)})`
+                  : f === 'anomaly' ? `⚡ ANOMALÍAS (${data?.summary.anomaly ?? 0})`
+                  : f === 'ok' ? `✓ OK (${data?.summary.ok ?? 0})`
+                  : `– SIN DATOS (${data?.summary.no_data ?? 0})`}
+              </button>
+            ))}
+          </div>
+
+          {/* Búsqueda */}
+          <input
+            className="dt-search"
+            placeholder="Buscar tag / atributo / máquina…"
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+          />
+        </div>
+
+        {/* Filtros de línea y máquina */}
+        <div className="dt-toolbar dt-toolbar-2">
+          <select className="dt-select" value={lineFilter} onChange={e => setLineFilter(e.target.value)}>
+            <option value="">Todas las líneas</option>
+            {(data?.filters.lines ?? []).map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <select className="dt-select" value={machineFilter} onChange={e => setMachineFilter(e.target.value)}>
+            <option value="">Todas las máquinas</option>
+            {(data?.filters.machines ?? []).map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <span className="dt-count">
+            {loading ? 'Cargando…' : `${data?.total_rows ?? 0} filas · pág ${data?.page ?? 1}/${data?.pages ?? 1}`}
+          </span>
+        </div>
+
+        {/* Tabla */}
+        <div className="dt-table-wrap">
+          <table className="dt-table">
+            <thead>
+              <tr>
+                <th>Línea</th>
+                <th>Máquina</th>
+                <th>Atributo</th>
+                <th>Estado</th>
+                <th className="dt-num">Pts</th>
+                <th className="dt-num">Avg</th>
+                <th className="dt-num">Min</th>
+                <th className="dt-num">Max</th>
+                <th className="dt-num">Stdev</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((r, i) => (
+                <tr key={i} className={`dt-row${r.status !== 'OK' && r.status !== 'NO_DATA' ? ' dt-row-anomaly' : r.status === 'NO_DATA' ? ' dt-row-nodata' : ''}`}>
+                  <td className="dt-cell-dim">{r.line}</td>
+                  <td>{r.machine}</td>
+                  <td className="dt-cell-attr" title={r.tag}>{r.attribute}</td>
+                  <td>
+                    <span className="dt-status-badge" style={{ color: getStatusColor(r.status), borderColor: getStatusColor(r.status) }}>
+                      {statusIcon(r.status)} {r.status}
+                    </span>
+                  </td>
+                  <td className="dt-num">{r.count}</td>
+                  <td className="dt-num">{r.avg !== null ? r.avg?.toFixed(3) : '—'}</td>
+                  <td className="dt-num">{r.min !== null ? r.min?.toFixed(3) : '—'}</td>
+                  <td className="dt-num">{r.max !== null ? r.max?.toFixed(3) : '—'}</td>
+                  <td className="dt-num">{r.stdev !== null ? r.stdev?.toFixed(4) : '—'}</td>
+                </tr>
+              ))}
+              {visibleRows.length === 0 && !loading && (
+                <tr><td colSpan={9} className="dt-empty">Sin resultados para los filtros actuales</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Paginación */}
+        {(data?.pages ?? 1) > 1 && (
+          <div className="dt-pagination">
+            <button className="dt-pg-btn" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>◀</button>
+            {Array.from({ length: Math.min(data!.pages, 10) }, (_, i) => {
+              const p = i + 1
+              return (
+                <button key={p} className={`dt-pg-btn${page === p ? ' active' : ''}`} onClick={() => setPage(p)}>{p}</button>
+              )
+            })}
+            <button className="dt-pg-btn" disabled={page >= (data?.pages ?? 1)} onClick={() => setPage(p => p + 1)}>▶</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Banner ───────────────────────────────────────────────────────────────────
 const BANNER = [
   '  ██╗  ██╗███████╗███╗   ███╗███████╗██╗  ██╗',
@@ -767,6 +977,7 @@ export default function App() {
     phase: 'idle', pct: 0, log: [], summary: null, error: null,
   })
   const [scanOpen, setScanOpen] = useState(false)
+  const [tableOpen, setTableOpen] = useState(false)
 
   // ── Escape key closes lightbox ────────────────────────────────────────────
   useEffect(() => {
@@ -1052,6 +1263,14 @@ export default function App() {
             : scanState.phase === 'done' ? '✔ SCAN'
             : '⬡ SCAN'}
         </button>
+        {(scanState.phase === 'done') && (
+          <button
+            className="dt-open-btn"
+            onClick={() => setTableOpen(true)}
+            title="Ver datos del último escaneo">
+            📊 DATOS
+          </button>
+        )}
         <button className="theme-btn" onClick={() => setLightMode(l => !l)} title="Cambiar tema">
           {lightMode ? '◑ DARK' : '○ LIGHT'}
         </button>
@@ -1108,6 +1327,11 @@ export default function App() {
       {/* Health Scan Panel */}
       {scanOpen && (
         <HealthScanPanel scan={scanState} onClose={() => setScanOpen(false)} />
+      )}
+
+      {/* Scan Data Table */}
+      {tableOpen && (
+        <ScanDataTable onClose={() => setTableOpen(false)} />
       )}
 
       {/* Lightbox */}
