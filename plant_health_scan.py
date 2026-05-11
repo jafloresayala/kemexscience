@@ -249,15 +249,27 @@ class PlantHealthScanner:
         return h
 
     # ── Función principal ──────────────────────────────────────────────────────
-    def run(self, hours: int = SCAN_HOURS) -> ScanResult:
+    def run(
+        self,
+        hours: int = SCAN_HOURS,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
+    ) -> ScanResult:
         scan_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         started = datetime.now()
-        to_dt   = started
-        from_dt = to_dt - timedelta(hours=hours)
+
+        if from_dt is not None and to_dt is not None:
+            # Rango explícito proporcionado por el usuario
+            range_label = f"{from_dt.strftime('%Y-%m-%d %H:%M')} → {to_dt.strftime('%Y-%m-%d %H:%M')}"
+        else:
+            to_dt   = started
+            from_dt = to_dt - timedelta(hours=hours)
+            range_label = f"últimas {hours}h"
+
         from_pi = _format_pi_dt(from_dt)
         to_pi   = _format_pi_dt(to_dt)
 
-        self._emit(f"🚀 Iniciando Plant Health Scan — últimas {hours}h", 0,
+        self._emit(f"🚀 Iniciando Plant Health Scan — {range_label}", 0,
                    {"scan_id": scan_id, "from": from_dt.isoformat(), "to": to_dt.isoformat()})
 
         # ── Fase 1 ────────────────────────────────────────────────────────────

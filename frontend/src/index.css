@@ -1473,6 +1473,52 @@ body {
 .plan-textarea:focus { border-color: var(--cyan); }
 .plan-textarea::placeholder { color: var(--dim); opacity: 0.7; }
 
+/* ── Date range row ── */
+.plan-daterow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.plan-datefield {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 160px;
+}
+.plan-datelabel {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+.plan-dateinput {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s;
+  color-scheme: dark;
+}
+.plan-dateinput:focus { border-color: var(--cyan); }
+.plan-dateinput-err { border-color: var(--red) !important; }
+.plan-datehint {
+  font-size: 9.5px;
+  color: var(--dim);
+  align-self: flex-end;
+  padding-bottom: 5px;
+  flex-shrink: 0;
+}
+.plan-dateerr { color: var(--red); }
+.light .plan-dateinput { color-scheme: light; background: var(--bg); }
+
+
+
 .plan-examples-label {
   font-size: 9px;
   font-weight: 700;

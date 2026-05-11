@@ -359,9 +359,36 @@ def execute_code(req: ExecuteRequest) -> dict:
 _scan_state: dict = {"running": False, "scanner": None}
 
 
-async def _stream_health_scan(plan: str = "") -> AsyncGenerator[str, None]:
+def _parse_scan_dt(s: str) -> "datetime | None":
+    """Parse ISO date string (YYYY-MM-DD or YYYY-MM-DDTHH:MM) to datetime."""
+    from datetime import datetime as _dt
+    s = s.strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return _dt.strptime(s, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+async def _stream_health_scan(
+    plan: str = "",
+    from_dt: str = "",
+    to_dt: str = "",
+) -> AsyncGenerator[str, None]:
     if _scan_state["running"]:
         yield _sse({"type": "error", "msg": "Ya hay un escaneo en curso."})
+        yield _sse({"type": "done"})
+        return
+
+    parsed_from = _parse_scan_dt(from_dt)
+    parsed_to   = _parse_scan_dt(to_dt)
+
+    # Validate range when both are supplied
+    if parsed_from is not None and parsed_to is not None and parsed_to <= parsed_from:
+        yield _sse({"type": "error", "msg": "La fecha de inicio debe ser anterior a la fecha de fin."})
         yield _sse({"type": "done"})
         return
 
@@ -380,7 +407,7 @@ async def _stream_health_scan(plan: str = "") -> AsyncGenerator[str, None]:
                 output_dir=str(Path(__file__).parent),
             )
             _scan_state["scanner"] = scanner
-            result = scanner.run(hours=24)
+            result = scanner.run(from_dt=parsed_from, to_dt=parsed_to)
             result_holder["result"] = result
             result_holder["prompt"] = build_ai_prompt(result, plan=plan)
         except Exception as exc:
@@ -419,12 +446,14 @@ async def _stream_health_scan(plan: str = "") -> AsyncGenerator[str, None]:
 
 class ScanRequest(BaseModel):
     plan: str = ""
+    from_dt: str = ""   # ISO date string YYYY-MM-DD or YYYY-MM-DDTHH:MM (optional)
+    to_dt: str = ""     # ISO date string YYYY-MM-DD or YYYY-MM-DDTHH:MM (optional)
 
 
 @app.post("/api/health-scan")
 async def health_scan(req: ScanRequest = ScanRequest()) -> StreamingResponse:
     return StreamingResponse(
-        _stream_health_scan(plan=req.plan),
+        _stream_health_scan(plan=req.plan, from_dt=req.from_dt, to_dt=req.to_dt),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

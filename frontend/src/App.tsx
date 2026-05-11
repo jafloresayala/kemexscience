@@ -1289,18 +1289,24 @@ function PlanModal({
   onStart,
   onCancel,
 }: {
-  onStart: (plan: string) => void
+  onStart: (plan: string, fromDt: string, toDt: string) => void
   onCancel: () => void
 }) {
   const [plan, setPlan] = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate]     = useState('')
   const textRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { textRef.current?.focus() }, [])
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onCancel()
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) onStart(plan)
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) onStart(plan, fromDate, toDate)
   }
+
+  const dateError = fromDate && toDate && toDate <= fromDate
+    ? 'La fecha de inicio debe ser anterior a la fecha de fin'
+    : null
 
   return (
     <div className="plan-overlay" onClick={onCancel}>
@@ -1317,6 +1323,37 @@ function PlanModal({
             Opcionalmente, define un enfoque para el análisis de la IA.<br/>
             Si lo dejas vacío, se realizará el análisis general de salud de planta.
           </p>
+
+          {/* ── Date range ── */}
+          <div className="plan-daterow">
+            <div className="plan-datefield">
+              <label className="plan-datelabel">📅 Desde</label>
+              <input
+                type="datetime-local"
+                className={`plan-dateinput${dateError ? ' plan-dateinput-err' : ''}`}
+                value={fromDate}
+                onChange={e => setFromDate(e.target.value)}
+              />
+            </div>
+            <div className="plan-datefield">
+              <label className="plan-datelabel">📅 Hasta</label>
+              <input
+                type="datetime-local"
+                className={`plan-dateinput${dateError ? ' plan-dateinput-err' : ''}`}
+                value={toDate}
+                onChange={e => setToDate(e.target.value)}
+              />
+            </div>
+            <div className="plan-datehint">
+              {dateError
+                ? <span className="plan-dateerr">{dateError}</span>
+                : (!fromDate && !toDate)
+                  ? <span>Sin rango → últimas 24 h</span>
+                  : (fromDate && !toDate) || (!fromDate && toDate)
+                  ? <span className="plan-dateerr">Completa ambas fechas</span>
+                  : null}
+            </div>
+          </div>
 
           <textarea
             ref={textRef}
@@ -1342,12 +1379,13 @@ function PlanModal({
         </div>
 
         <div className="plan-footer">
-          <button className="plan-btn-skip" onClick={() => onStart('')}>
+          <button className="plan-btn-skip" onClick={() => onStart('', '', '')}>
             ⬡ Sin plan — análisis general
           </button>
           <button
             className="plan-btn-start"
-            onClick={() => onStart(plan)}
+            disabled={!!dateError || (!!fromDate !== !!toDate)}
+            onClick={() => onStart(plan, fromDate, toDate)}
           >
             {plan.trim() ? '🎯 Iniciar con este plan' : '⬡ Iniciar análisis general'}
           </button>
@@ -1963,7 +2001,7 @@ export default function App() {
   }, [])
 
   // ── Plant Health Scan ──────────────────────────────────────────────
-  const runHealthScan = useCallback(async (plan: string = '') => {
+  const runHealthScan = useCallback(async (plan: string = '', fromDt: string = '', toDt: string = '') => {
     if (scanState.phase === 'running') return
     setActivePlan(plan)
     setScanState({ phase: 'running', pct: 0, log: [], summary: null, error: null })
@@ -1972,7 +2010,7 @@ export default function App() {
       const res = await fetch('/api/health-scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({ plan, from_dt: fromDt, to_dt: toDt }),
       })
       for await (const ev of readSSE(res)) {
         const e = ev as Record<string, unknown>
@@ -2207,7 +2245,7 @@ export default function App() {
       {/* Plan Modal */}
       {planOpen && (
         <PlanModal
-          onStart={plan => { setPlanOpen(false); runHealthScan(plan) }}
+          onStart={(plan, fromDt, toDt) => { setPlanOpen(false); runHealthScan(plan, fromDt, toDt) }}
           onCancel={() => setPlanOpen(false)}
         />
       )}
