@@ -372,6 +372,7 @@ interface AFNode {
   state: 'idle' | 'querying' | 'done'
   toolName: string; queryCount: number; ts: string
   loaded: boolean
+  collapsed: boolean
 }
 
 function parseToolPath(preview: string): string | null {
@@ -387,7 +388,7 @@ function buildAfTree(events: ToolEvent[]): Map<string, AFNode> {
   map.set('__root__', {
     id: '__root__', name: 'PI ROOT', path: '',
     parentId: null, childIds: [], type: 'root',
-    state: 'idle', toolName: '', queryCount: 0, ts: '', loaded: true,
+    state: 'idle', toolName: '', queryCount: 0, ts: '', loaded: true, collapsed: false,
   })
   let lastPath: string | null = null
   for (const ev of events) {
@@ -413,7 +414,7 @@ function buildAfTree(events: ToolEvent[]): Map<string, AFNode> {
             childIds: [], type: 'element',
             state: isLast ? 'querying' : 'done',
             toolName: isLast ? ev.name : '', queryCount: isLast ? 1 : 0, ts: isLast ? ev.timestamp : '',
-            loaded: false,
+            loaded: false, collapsed: false,
           })
           const parent = map.get(parentId)!
           if (!parent.childIds.includes(nid))
@@ -462,7 +463,8 @@ function computeLayout(
   function place(id: string, left: number, depth: number): number {
     const node = nodes.get(id)
     if (!node) return left + hGap
-    if (node.childIds.length === 0) {
+    // If collapsed or no children, treat as leaf
+    if (node.collapsed || node.childIds.length === 0) {
       pos.set(id, { x: left + hGap / 2, y: depth * vGap + 40 })
       return left + hGap
     }
@@ -490,12 +492,13 @@ function nodeDisplayLabel(node: AFNode): string {
 }
 
 function PiNodeGraph({
-  nodes, focusedId, onFocus, onExpand, selectedId, onSelect,
+  nodes, focusedId, onFocus, onExpand, onCollapse, selectedId, onSelect,
 }: {
   nodes: Map<string, AFNode>
   focusedId: string
   onFocus: (id: string) => void
   onExpand: (node: AFNode) => void
+  onCollapse: (node: AFNode) => void
   selectedId: string | null
   onSelect: (node: AFNode) => void
 }) {
@@ -636,7 +639,9 @@ function PiNodeGraph({
         const isRoot = node.type === 'root'
         const R = isRoot ? 24 : 19
         const canExpand = !node.loaded && !isRoot
-        const canDrill = node.loaded && node.childIds.length > 0
+        const canCollapse = node.loaded && node.childIds.length > 0 && !node.collapsed && !isRoot
+        const canUnCollapse = node.loaded && node.childIds.length > 0 && node.collapsed && !isRoot
+        const canDrill = node.loaded && node.childIds.length > 0 && !node.collapsed
         const isSelected = id === selectedId
         const shortName = node.name.length > 13 ? node.name.slice(0, 12) + '…' : node.name
 
@@ -644,20 +649,25 @@ function PiNodeGraph({
           <g
             key={id}
             transform={`translate(${p.x},${p.y})`}
-            style={{ cursor: isRoot ? 'default' : (canExpand || canDrill) ? 'pointer' : 'default' }}
+            style={{ cursor: isRoot ? 'default' : (canExpand || canDrill || canUnCollapse) ? 'pointer' : 'default' }}
             onMouseEnter={() => setHoveredId(id)}
             onMouseLeave={() => setHoveredId(null)}
             onClick={() => {
               if (isRoot) return
               if (canExpand) onExpand(node)
+              else if (canUnCollapse) onCollapse(node)
               else if (canDrill) onFocus(id)
             }}
           >
-            {/* Expanding pulse ring for querying */}
-            {querying && (
-              <circle r={R + 9} fill="none" stroke="#ffb700" strokeWidth="1.2"
-                opacity="0.5" className="svg-pulse-ring" />
-            )}
+            {/* AI scanning animation rings for querying */}
+            {querying && (<>
+              <circle r={R + 7}  fill="none" stroke="#ffb700" strokeWidth="1.4"
+                opacity="0.7" className="svg-pulse-ring svg-ring-1" />
+              <circle r={R + 14} fill="none" stroke="#ffb700" strokeWidth="0.9"
+                opacity="0.45" className="svg-pulse-ring svg-ring-2" />
+              <circle r={R + 21} fill="none" stroke="#00c8ff" strokeWidth="0.6"
+                opacity="0.25" className="svg-pulse-ring svg-ring-3" />
+            </>)}
             {/* Selected ring */}
             {isSelected && (
               <circle r={R + 12} fill="none" stroke="#00ff41" strokeWidth="1.2"
@@ -694,11 +704,17 @@ function PiNodeGraph({
               fill={lit ? '#00c8ff' : querying ? '#ffb700' : '#4a6880'}>
               {shortName}
             </text>
-            {/* Expand / drill hint */}
+            {/* Expand / drill / collapse hints */}
             {canExpand && (
               <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
-                fill={lit ? 'rgba(255,183,0,0.8)' : 'rgba(255,183,0,0.35)'}>
-                + expandir
+                fill={lit ? 'rgba(255,183,0,0.9)' : 'rgba(255,183,0,0.45)'}>
+                ＋ expandir
+              </text>
+            )}
+            {querying && (
+              <text y={R + 23} textAnchor="middle" fontSize="7" fontFamily="monospace"
+                fill="#ffb700" className="svg-icon-querying">
+                cargando…
               </text>
             )}
             {canDrill && (
@@ -706,6 +722,24 @@ function PiNodeGraph({
                 fill={lit ? 'rgba(0,200,255,0.65)' : 'rgba(0,200,255,0.22)'}>
                 {node.childIds.length} ›
               </text>
+            )}
+            {canUnCollapse && (
+              <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
+                fill={lit ? 'rgba(0,255,120,0.8)' : 'rgba(0,255,120,0.35)'}>
+                ＋ mostrar
+              </text>
+            )}
+            {/* Collapse button — shown on hover when node has loaded children */}
+            {hoveredId === id && canCollapse && (
+              <g
+                transform={`translate(${R - 3},${R - 3})`}
+                style={{ cursor: 'pointer' }}
+                onClick={e => { e.stopPropagation(); onCollapse(node) }}
+              >
+                <circle r="7" fill="rgba(0,12,30,0.95)" stroke="rgba(0,200,255,0.6)" strokeWidth="1.1" />
+                <text textAnchor="middle" dominantBaseline="central"
+                  fontSize="11" fill="rgba(0,200,255,0.9)" fontFamily="monospace">−</text>
+              </g>
             )}
             {/* Query count badge */}
             {node.queryCount > 0 && !querying && (
@@ -742,11 +776,12 @@ function PiNodeGraph({
 }
 
 // ─── PI Tree Panel ────────────────────────────────────────────────────────────
-function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, onExpandNode }: {
+function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, onExpandNode, onCollapseNode }: {
   nodes: Map<string, AFNode>; tools: ToolEvent[]
   toolsOpen: boolean; onToggle: () => void
   selectedId: string | null; onSelect: (node: AFNode) => void
   onExpandNode: (node: AFNode) => void
+  onCollapseNode: (node: AFNode) => void
 }) {
   const [focusedId, setFocusedId] = useState('__root__')
   const evEndRef = useRef<HTMLDivElement>(null)
@@ -833,6 +868,7 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
             focusedId={focusedId}
             onFocus={handleFocus}
             onExpand={onExpandNode}
+            onCollapse={onCollapseNode}
             selectedId={selectedId}
             onSelect={onSelect}
           />
@@ -1268,7 +1304,7 @@ export default function App() {
               id: nid, name: ch.name, path: ch.path,
               parentId, childIds: [], type: 'element',
               state: 'idle', toolName: '', queryCount: 0, ts: '',
-              loaded: false,
+              loaded: false, collapsed: false,
             } as AFNode)
           }
           if (!newChildIds.includes(nid)) newChildIds.push(nid)
@@ -1286,6 +1322,16 @@ export default function App() {
         return next
       })
     }
+  }, [])
+
+  // Toggle collapse on an already-loaded node
+  const collapseNode = useCallback((node: AFNode) => {
+    setExplorerNodes(prev => {
+      const next = new Map(prev)
+      const n = next.get(node.id) ?? node
+      next.set(node.id, { ...n, collapsed: !n.collapsed })
+      return next
+    })
   }, [])
 
   // ── Status polling ─────────────────────────────────────────────────────────
@@ -1654,6 +1700,7 @@ export default function App() {
           selectedId={ctxNode?.id ?? null}
           onSelect={n => setCtxNode(prev => prev?.id === n.id ? null : n)}
           onExpandNode={loadChildren}
+          onCollapseNode={collapseNode}
         />
       </div>
 
