@@ -478,16 +478,12 @@ def _tag_detail_for_prompt(t: TagHealth) -> dict:
     return d
 
 
-def build_ai_prompt(result: ScanResult) -> str:
+def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
     """
     Construye un prompt compacto pero específico para el LLM.
 
-    Estrategia:
-    - Para las top 5 líneas: enviar los tags REALES con anomalías (FLATLINE / SPIKE / ERROR),
-      separados de los NO_DATA.
-    - Siempre incluir algunos tags OK como referencia de qué SÍ está funcionando.
-    - NO_DATA se reporta solo en conteo — no saturar el prompt con lista completa.
-    - El prompt de instrucción es explícito: pedir nombres de tags, causas y acciones.
+    Si `plan` está definido, el análisis se orienta completamente a ese objetivo.
+    Si no, usa el análisis predeterminado de salud general de planta.
     """
     # Agrupar por línea
     by_line: dict[str, list[MachineHealth]] = {}
@@ -633,6 +629,26 @@ IMPORTANTE:
 - Enfócate en los tags con FLATLINE y SPIKE ya que son los que tienen datos reales con anomalías
 - Si una máquina tiene 0 tags con anomalías (solo NO_DATA), indícalo brevemente y pasa a la siguiente
 - Sé específico y accionable — el equipo de mantenimiento usará este reporte para tomar decisiones hoy
+"""
+
+    if plan.strip():
+        instructions = f"""\
+Eres un ingeniero experto en manufactura electrónica SMT. El usuario ha definido el siguiente PLAN DE ANÁLISIS:
+
+---
+🎯 PLAN DE ANÁLISIS DEL USUARIO:
+{plan.strip()}
+---
+
+Tu análisis debe estar completamente orientado a cumplir ese plan. Usa los datos del escaneo para responder exactamente lo que el usuario pidió.
+
+Reglas que siempre aplican independientemente del plan:
+- Usa los nombres exactos de los tags del JSON (campo `attr`) al referenciar cualquier medición
+- Indica el tipo de anomalía (FLATLINE, SPIKE) y los valores observados (avg, rango, stdev) cuando sea relevante
+- Ignora los tags NO_DATA en el detalle — solo menciona el conteo si es relevante para el plan
+- Sé específico y accionable — el equipo usará este análisis para tomar decisiones
+
+Estructura tu respuesta de forma clara con secciones según lo requiera el plan del usuario.
 """
 
     return (

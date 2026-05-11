@@ -295,7 +295,7 @@ def execute_code(req: ExecuteRequest) -> dict:
 _scan_state: dict = {"running": False, "scanner": None}
 
 
-async def _stream_health_scan() -> AsyncGenerator[str, None]:
+async def _stream_health_scan(plan: str = "") -> AsyncGenerator[str, None]:
     if _scan_state["running"]:
         yield _sse({"type": "error", "msg": "Ya hay un escaneo en curso."})
         yield _sse({"type": "done"})
@@ -318,7 +318,7 @@ async def _stream_health_scan() -> AsyncGenerator[str, None]:
             _scan_state["scanner"] = scanner
             result = scanner.run(hours=24)
             result_holder["result"] = result
-            result_holder["prompt"] = build_ai_prompt(result)
+            result_holder["prompt"] = build_ai_prompt(result, plan=plan)
         except Exception as exc:
             result_holder["error"] = str(exc)
         finally:
@@ -353,10 +353,14 @@ async def _stream_health_scan() -> AsyncGenerator[str, None]:
     yield _sse({"type": "done"})
 
 
+class ScanRequest(BaseModel):
+    plan: str = ""
+
+
 @app.post("/api/health-scan")
-async def health_scan() -> StreamingResponse:
+async def health_scan(req: ScanRequest = ScanRequest()) -> StreamingResponse:
     return StreamingResponse(
-        _stream_health_scan(),
+        _stream_health_scan(plan=req.plan),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

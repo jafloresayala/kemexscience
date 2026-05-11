@@ -729,6 +729,89 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
   )
 }
 
+// ─── Plan Modal ───────────────────────────────────────────────────────────────
+const PLAN_EXAMPLES = [
+  'Enfócate en las Reflow Ovens — analiza temperaturas y perfiles térmicos',
+  'Identifica qué líneas tuvieron más paros o señales flatline en sensores de velocidad',
+  'Analiza solo las Paste Printers: presión del squeegee, velocidad y altura de pasta',
+  'Compara el rendimiento entre turnos buscando patrones en las últimas 24h',
+  'Detecta posibles problemas de mantenimiento preventivo vencido basándote en los flatlines',
+]
+
+function PlanModal({
+  onStart,
+  onCancel,
+}: {
+  onStart: (plan: string) => void
+  onCancel: () => void
+}) {
+  const [plan, setPlan] = useState('')
+  const textRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => { textRef.current?.focus() }, [])
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') onCancel()
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) onStart(plan)
+  }
+
+  return (
+    <div className="plan-overlay" onClick={onCancel}>
+      <div className="plan-modal" onClick={e => e.stopPropagation()} onKeyDown={handleKey}>
+
+        <div className="plan-hdr">
+          <span className="plan-icon">🎯</span>
+          <span className="plan-title">PLAN DE ANÁLISIS</span>
+          <button className="plan-close" onClick={onCancel}>✕</button>
+        </div>
+
+        <div className="plan-body">
+          <p className="plan-desc">
+            Opcionalmente, define un enfoque para el análisis de la IA.<br/>
+            Si lo dejas vacío, se realizará el análisis general de salud de planta.
+          </p>
+
+          <textarea
+            ref={textRef}
+            className="plan-textarea"
+            value={plan}
+            onChange={e => setPlan(e.target.value)}
+            placeholder="Ej: Enfócate en las Reflow Ovens y analiza si hay problemas de temperatura en zonas específicas…"
+            rows={4}
+          />
+
+          <div className="plan-examples-label">Ejemplos rápidos:</div>
+          <div className="plan-examples">
+            {PLAN_EXAMPLES.map((ex, i) => (
+              <button
+                key={i}
+                className="plan-example-btn"
+                onClick={() => setPlan(ex)}
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="plan-footer">
+          <button className="plan-btn-skip" onClick={() => onStart('')}>
+            ⬡ Sin plan — análisis general
+          </button>
+          <button
+            className="plan-btn-start"
+            onClick={() => onStart(plan)}
+          >
+            {plan.trim() ? '🎯 Iniciar con este plan' : '⬡ Iniciar análisis general'}
+          </button>
+        </div>
+
+        <div className="plan-hint">Ctrl+Enter para iniciar · Esc para cancelar</div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Scan Data Table ──────────────────────────────────────────────────────────
 interface TableRow {
   line: string; machine: string; attribute: string; tag: string
@@ -978,6 +1061,8 @@ export default function App() {
   })
   const [scanOpen, setScanOpen] = useState(false)
   const [tableOpen, setTableOpen] = useState(false)
+  const [planOpen, setPlanOpen] = useState(false)
+  const [activePlan, setActivePlan] = useState('')
 
   // ── Escape key closes lightbox ────────────────────────────────────────────
   useEffect(() => {
@@ -1147,12 +1232,17 @@ export default function App() {
   }, [])
 
   // ── Plant Health Scan ──────────────────────────────────────────────
-  const runHealthScan = useCallback(async () => {
+  const runHealthScan = useCallback(async (plan: string = '') => {
     if (scanState.phase === 'running') return
+    setActivePlan(plan)
     setScanState({ phase: 'running', pct: 0, log: [], summary: null, error: null })
     setScanOpen(true)
     try {
-      const res = await fetch('/api/health-scan', { method: 'POST' })
+      const res = await fetch('/api/health-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan }),
+      })
       for await (const ev of readSSE(res)) {
         const e = ev as Record<string, unknown>
         if (e.type === 'progress') {
@@ -1168,7 +1258,7 @@ export default function App() {
           // Enviar prompt al agente automáticamente
           setMessages(prev => [...prev, {
             id: uid(), role: 'system',
-            content: `✅ Plant Health Scan completado\n• ${summary.lines} líneas • ${summary.machines} máquinas • ${summary.tags} tags\nAnalizando resultados con la IA…`,
+            content: `✅ Plant Health Scan completado\n• ${summary.lines} líneas • ${summary.machines} máquinas • ${summary.tags} tags${plan.trim() ? `\n🎯 Plan: ${plan.trim().slice(0, 80)}${plan.length > 80 ? '…' : ''}` : ''}\nAnalizando resultados con la IA…`,
             timestamp: now(),
           }])
           // Mandar el prompt al agente directamente vía sendMessage logic
@@ -1272,14 +1362,14 @@ export default function App() {
         <span className="status-dim">{status.cacheInfo}</span>
         <button
           className={`hscan-btn${scanState.phase === 'running' ? ' hscan-btn-active' : ''}`}
-          onClick={() => scanState.phase === 'idle' || scanState.phase === 'done' || scanState.phase === 'error'
-            ? runHealthScan()
-            : setScanOpen(true)
-          }
-          title="Plant Health Scan — análisis de toda la planta">
+          onClick={() => {
+            if (scanState.phase === 'running') { setScanOpen(true); return }
+            setPlanOpen(true)
+          }}
+          title={activePlan ? `Plan activo: ${activePlan.slice(0, 60)}…` : 'Plant Health Scan — análisis de toda la planta'}>
           {scanState.phase === 'running'
             ? `▶ SCAN ${scanState.pct.toFixed(0)}%`
-            : scanState.phase === 'done' ? '✔ SCAN'
+            : scanState.phase === 'done' ? (activePlan ? '🎯 SCAN' : '✔ SCAN')
             : '⬡ SCAN'}
         </button>
         {(scanState.phase === 'done') && (
@@ -1342,6 +1432,14 @@ export default function App() {
         </button>
         </div>
       </div>
+
+      {/* Plan Modal */}
+      {planOpen && (
+        <PlanModal
+          onStart={plan => { setPlanOpen(false); runHealthScan(plan) }}
+          onCancel={() => setPlanOpen(false)}
+        />
+      )}
 
       {/* Health Scan Panel */}
       {scanOpen && (
