@@ -503,48 +503,48 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
         return sum(m.issue_score for m in machines)
 
     line_scores = {ln: (_line_anomaly_score(ms), _line_total_score(ms)) for ln, ms in by_line.items()}
-    top5_lines = sorted(line_scores.items(), key=lambda x: x[1][0] + x[1][1] * 0.1, reverse=True)[:5]
+    sorted_lines = sorted(line_scores.items(), key=lambda x: x[1][0] + x[1][1] * 0.1, reverse=True)
 
-    lines_summary = []
-    for ln, (anomaly_score, total_score) in top5_lines:
+    # Con plan: todas las líneas completas (el usuario puede pedir cualquiera).
+    # Sin plan: solo top 5 para mantener el prompt compacto.
+    lines_to_use = sorted_lines if plan.strip() else sorted_lines[:5]
+
+    def _build_line_entry(ln: str, anomaly_score: float, total_score: float) -> dict:
+        from collections import Counter as _Counter
         machines = sorted(by_line[ln], key=lambda m: m.issue_score, reverse=True)
-        top_maq = machines[:6]
+        # Con plan: todas las máquinas; sin plan: top 6
+        maq_pool = machines if plan.strip() else machines[:6]
         maq_list = []
-        for m in top_maq:
-            # Tags con anomalías reales (flatline, spike, error) — nombres específicos
+        for m in maq_pool:
             anomalous = [
                 _tag_detail_for_prompt(t)
                 for t in m.tag_details
                 if t.issues and "NO_DATA" not in t.issues
             ]
-            # Tags OK — muestra hasta 3 para contexto
             ok_tags = [
                 t.attribute_name or t.tag_name
                 for t in m.tag_details
                 if not t.issues and t.count and t.count > 0
             ][:3]
-
             maq_entry: dict = {
                 "machine": m.machine_name,
                 "score": round(m.issue_score, 1),
                 "tags_scanned": m.tags_scanned,
-                "no_data_count": m.tags_no_data,   # solo conteo
-                "anomalous_tags": anomalous,        # lista con nombres y stats
-                "sample_ok_tags": ok_tags,          # contexto de lo que sí funciona
+                "no_data_count": m.tags_no_data,
+                "anomalous_tags": anomalous,
+                "sample_ok_tags": ok_tags,
             }
             if m.scan_error:
                 maq_entry["api_error"] = m.scan_error
             maq_list.append(maq_entry)
 
-        # Patrón dominante de la línea
         all_issues: list[str] = []
         for m in machines:
             for t in m.tag_details:
                 all_issues.extend(i for i in t.issues if i != "NO_DATA")
-        from collections import Counter
-        issue_counts = Counter(all_issues)
+        issue_counts = _Counter(all_issues)
 
-        lines_summary.append({
+        return {
             "line": ln,
             "anomaly_score": round(anomaly_score, 1),
             "total_score": round(total_score, 1),
@@ -554,8 +554,13 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
                 if any(t.issues and "NO_DATA" not in t.issues for t in m.tag_details)
             ),
             "dominant_issues": dict(issue_counts.most_common(3)),
-            "top_machines": maq_list,
-        })
+            "machines": maq_list,
+        }
+
+    lines_summary = [
+        _build_line_entry(ln, anomaly_score, total_score)
+        for ln, (anomaly_score, total_score) in lines_to_use
+    ]
 
     # Resumen global de tipos de issues en toda la planta
     global_issues: Counter = Counter()
@@ -580,7 +585,8 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
             "OK": "Tag con datos normales, sin anomalías detectadas.",
             "score": "issue_score = FLATLINE/SPIKE × 1.5  +  NO_DATA × 2  +  ERROR × 3. Mayor score = mayor urgencia.",
         },
-        "top5_lines": lines_summary,
+        # Con plan: todas las líneas. Sin plan: top 5 ordenadas por anomalías.
+        "lines_data": lines_summary,
     }
 
     instructions = """\
@@ -642,11 +648,13 @@ Eres un ingeniero experto en manufactura electrónica SMT. El usuario ha definid
 
 Tu análisis debe estar completamente orientado a cumplir ese plan. Usa los datos del escaneo para responder exactamente lo que el usuario pidió.
 
-Reglas que siempre aplican independientemente del plan:
-- Usa los nombres exactos de los tags del JSON (campo `attr`) al referenciar cualquier medición
-- Indica el tipo de anomalía (FLATLINE, SPIKE) y los valores observados (avg, rango, stdev) cuando sea relevante
-- Ignora los tags NO_DATA en el detalle — solo menciona el conteo si es relevante para el plan
-- Sé específico y accionable — el equipo usará este análisis para tomar decisiones
+IMPORTANTE — sobre los datos que recibes:
+- El campo `lines_data` contiene TODAS las líneas escaneadas de la planta (no solo un top 5). Puedes buscar cualquier línea o máquina por su nombre.
+- Cada línea tiene un array `machines` con todas sus máquinas, y cada máquina tiene `anomalous_tags` con los tags que tienen FLATLINE o SPIKE, con sus valores exactos.
+- Usa los nombres exactos de los tags (campo `attr`) al referenciar cualquier medición.
+- Indica el tipo de anomalía (FLATLINE, SPIKE) y los valores observados (avg, rango, stdev) cuando sea relevante.
+- Los tags NO_DATA solo reportan el conteo — no tienen datos de valores.
+- Sé específico y accionable — el equipo usará este análisis para tomar decisiones.
 
 Estructura tu respuesta de forma clara con secciones según lo requiera el plan del usuario.
 """
