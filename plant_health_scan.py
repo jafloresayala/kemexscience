@@ -23,6 +23,7 @@ import json
 import os
 import statistics
 import threading
+from collections import Counter
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
@@ -510,7 +511,6 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
     lines_to_use = sorted_lines if plan.strip() else sorted_lines[:5]
 
     def _build_line_entry(ln: str, anomaly_score: float, total_score: float) -> dict:
-        from collections import Counter as _Counter
         machines = sorted(by_line[ln], key=lambda m: m.issue_score, reverse=True)
         # Con plan: todas las máquinas; sin plan: top 6
         maq_pool = machines if plan.strip() else machines[:6]
@@ -542,7 +542,7 @@ def build_ai_prompt(result: ScanResult, plan: str = "") -> str:
         for m in machines:
             for t in m.tag_details:
                 all_issues.extend(i for i in t.issues if i != "NO_DATA")
-        issue_counts = _Counter(all_issues)
+        issue_counts = Counter(all_issues)
 
         return {
             "line": ln,
