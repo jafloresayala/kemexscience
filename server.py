@@ -200,21 +200,18 @@ def pi_children(path: str = "") -> dict:
     Usado por el explorador interactivo del PI AF Tree en el frontend.
     """
     try:
-        import json as _json
-        raw = backend.pi_fetch_child_elements(path or None)
-        data = _json.loads(raw.replace("... [TRUNCADO]", ""))
-        children = data.get("children", [])
-        return {
-            "path": data.get("query_path", path),
-            "count": len(children),
-            "children": [
-                {
-                    "name": c.get("name", ""),
-                    "path": c.get("path", ""),
-                }
-                for c in children
-            ],
-        }
+        safe_path = backend._safe_element_path(path or None)
+        data = backend._post(
+            backend.ENDPOINT_CHILDREN,
+            {"Plugin_Name": backend.PLUGIN_NAME, "Element_Path": safe_path},
+        )
+        rows = backend._ensure_list(data)
+        children = [
+            {"name": c.get("name", ""), "path": c.get("path", "")}
+            for c in rows
+            if c.get("name")
+        ]
+        return {"path": safe_path, "count": len(children), "children": children}
     except Exception as exc:
         return {"path": path, "count": 0, "children": [], "error": str(exc)}
 
@@ -223,27 +220,32 @@ def pi_children(path: str = "") -> dict:
 def pi_attributes(path: str) -> dict:
     """
     Devuelve los atributos (tags PI) de un elemento AF.
+    Solo incluye atributos con piPoint real (instancia, no template).
     Usado por el explorador interactivo del PI AF Tree en el frontend.
     """
     try:
-        import json as _json
-        raw = backend.pi_fetch_element_attributes(path)
-        data = _json.loads(raw.replace("... [TRUNCADO]", ""))
-        attrs = data.get("attributes", [])
-        return {
-            "path": path,
-            "count": len(attrs),
-            "attributes": [
-                {
-                    "name": a.get("attribute_name", ""),
-                    "tagName": a.get("piPoint") or a.get("tag_name_for_pi_get_tag_values", ""),
-                    "path": a.get("path", ""),
-                    "uom": a.get("UOM", ""),
-                    "currentValue": a.get("current_value"),
-                }
-                for a in attrs
-            ],
-        }
+        safe_path = backend._safe_element_path(path)
+        data = backend._post(
+            backend.ENDPOINT_ATTRIBUTES,
+            {"Plugin_Name": backend.PLUGIN_NAME, "Element_Path": safe_path},
+        )
+        rows = backend._ensure_list(data)
+        attrs = []
+        for item in rows:
+            pi_point = (
+                item.get("piPoint") or item.get("PiPoint") or
+                item.get("pi_point") or item.get("tagName")
+            )
+            if not pi_point:
+                continue  # omitir atributos de template sin PI point real
+            attrs.append({
+                "name": item.get("name", "") or item.get("attribute_name", ""),
+                "tagName": pi_point,
+                "path": item.get("path", ""),
+                "uom": item.get("UOM", "") or item.get("uom", ""),
+                "currentValue": item.get("value") or item.get("current_value"),
+            })
+        return {"path": safe_path, "count": len(attrs), "attributes": attrs}
     except Exception as exc:
         return {"path": path, "count": 0, "attributes": [], "error": str(exc)}
 

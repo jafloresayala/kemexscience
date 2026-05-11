@@ -524,6 +524,11 @@ function PiNodeGraph({
     zoomRef.current = 1; panRef.current = { x: 0, y: 0 }
   }, [focusedId])
 
+  const resetView = useCallback(() => {
+    setZoom(1); setPan({ x: 0, y: 0 })
+    zoomRef.current = 1; panRef.current = { x: 0, y: 0 }
+  }, [])
+
   // Zoom toward mouse cursor position
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
@@ -614,6 +619,10 @@ function PiNodeGraph({
       </defs>
       <g transform={`translate(${pan.x + 170},${pan.y + 40}) scale(${zoom})`}>
 
+      {/* ── Background: double-click to reset pan/zoom ── */}
+      <rect x={-9999} y={-9999} width={19998} height={19998}
+        fill="transparent" onDoubleClick={resetView} />
+
       {/* ── Edges ── */}
       {[...positions.entries()].flatMap(([id, p]) => {
         const node = nodes.get(id)!
@@ -660,6 +669,7 @@ function PiNodeGraph({
             style={{ cursor: (canExpand || canDrill || canUnCollapse || canLoadTags || isTag) ? 'pointer' : 'default' }}
             onMouseEnter={() => setHoveredId(id)}
             onMouseLeave={() => setHoveredId(null)}
+            onDoubleClick={e => e.stopPropagation()}
             onClick={() => {
               if (isRoot) return
               if (isTag) { onSelect(node); return }
