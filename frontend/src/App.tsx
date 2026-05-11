@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, KeyboardEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, KeyboardEvent } from 'react'
 import './index.css'
 
 // ─── AI Pet ───────────────────────────────────────────────────────────────────
@@ -263,14 +263,231 @@ function MessageBubble({
   )
 }
 
-// ─── Tool Row ─────────────────────────────────────────────────────────────────
-function ToolRow({ ev }: { ev: ToolEvent }) {
+// ─── AF Node Tree ────────────────────────────────────────────────────────────
+interface AFNode {
+  id: string; name: string; path: string
+  parentId: string | null; childIds: string[]
+  type: 'root' | 'element'
+  state: 'idle' | 'querying' | 'done'
+  toolName: string; queryCount: number; ts: string
+}
+
+function parseToolPath(preview: string): string | null {
+  const m = preview.match(/element_path=(?:'([^']*)'|"([^"]*)"|([^\s,]+))/)
+  if (!m) return null
+  const val = (m[1] ?? m[2] ?? m[3] ?? '').trim()
+  if (!val || val === 'None' || val === 'null') return null
+  return val
+}
+
+function buildAfTree(events: ToolEvent[]): Map<string, AFNode> {
+  const map = new Map<string, AFNode>()
+  map.set('__root__', {
+    id: '__root__', name: 'PI ROOT', path: '',
+    parentId: null, childIds: [], type: 'root',
+    state: 'idle', toolName: '', queryCount: 0, ts: '',
+  })
+  let lastPath: string | null = null
+  for (const ev of events) {
+    if (!ev.name.startsWith('pi_')) continue
+    if (ev.type === 'tool_call') {
+      lastPath = parseToolPath(ev.preview)
+      if (!lastPath) {
+        const root = map.get('__root__')!
+        map.set('__root__', { ...root, state: 'querying', toolName: ev.name, ts: ev.timestamp, queryCount: root.queryCount + 1 })
+        continue
+      }
+      const segs = lastPath.split(/[\/\\]+/).filter(Boolean)
+      let parentId = '__root__'
+      let built = ''
+      for (let i = 0; i < segs.length; i++) {
+        const seg = segs[i]
+        built = built ? `${built}/${seg}` : seg
+        const nid = `n:${built}`
+        const isLast = i === segs.length - 1
+        if (!map.has(nid)) {
+          map.set(nid, {
+            id: nid, name: seg, path: built, parentId,
+            childIds: [], type: 'element',
+            state: isLast ? 'querying' : 'done',
+            toolName: isLast ? ev.name : '', queryCount: isLast ? 1 : 0, ts: isLast ? ev.timestamp : '',
+          })
+          const parent = map.get(parentId)!
+          if (!parent.childIds.includes(nid))
+            map.set(parentId, { ...parent, childIds: [...parent.childIds, nid] })
+        } else if (isLast) {
+          const n = map.get(nid)!
+          map.set(nid, { ...n, state: 'querying', toolName: ev.name, queryCount: n.queryCount + 1, ts: ev.timestamp })
+        }
+        parentId = nid
+      }
+    } else if (ev.type === 'tool_result') {
+      const doneId = lastPath ? `n:${lastPath}` : '__root__'
+      const n = map.get(doneId)
+      if (n?.state === 'querying') map.set(doneId, { ...n, state: 'done' })
+    }
+  }
+  return map
+}
+
+function getRelatedIds(nodes: Map<string, AFNode>, targetId: string): Set<string> {
+  const ids = new Set<string>([targetId])
+  let cur: AFNode | undefined = nodes.get(targetId)
+  while (cur?.parentId) { ids.add(cur.parentId); cur = nodes.get(cur.parentId) }
+  const q = [...(nodes.get(targetId)?.childIds ?? [])]
+  while (q.length) {
+    const cid = q.shift()!; ids.add(cid)
+    nodes.get(cid)?.childIds.forEach(d => q.push(d))
+  }
+  return ids
+}
+
+// ─── Node Tree Item ───────────────────────────────────────────────────────────
+function NodeTreeItem({ nodeId, nodes, isLastStack, relatedIds, onHover, onFocus }: {
+  nodeId: string; nodes: Map<string, AFNode>; isLastStack: boolean[]
+  relatedIds: Set<string>; onHover: (id: string | null) => void; onFocus: (id: string) => void
+}) {
+  const node = nodes.get(nodeId)
+  if (!node) return null
+  const depth = isLastStack.length
+  const isLast = depth === 0 || isLastStack[depth - 1]
+  const lit = relatedIds.has(nodeId)
+
+  let indent = ''
+  for (let i = 0; i < depth - 1; i++) indent += isLastStack[i] ? '    ' : '│   '
+  if (depth > 0) indent += isLast ? '└── ' : '├── '
+
+  const stateIcon = node.state === 'querying' ? '⬡'
+    : node.type === 'root' ? '◉'
+    : node.state === 'done' ? '◈' : '○'
+
+  const toolShort: Record<string, string> = {
+    pi_fetch_child_elements: 'CHILDREN',
+    pi_fetch_element_attributes: 'ATTRS',
+    pi_fetch_tag_values: 'VALUES',
+    pi_get_tag_snapshot: 'SNAP',
+  }
+
   return (
-    <div className={`tool-row tool-${ev.type}`}>
-      <span className="tool-ts">[{ev.timestamp}]</span>
-      <span className="tool-icon">{ev.type === 'tool_call' ? '⚡' : '✓'}</span>
-      <span className="tool-name">{ev.name}</span>
-      {ev.preview && <div className="tool-preview">{ev.preview.slice(0, 90)}</div>}
+    <div className="tni-group">
+      <div
+        className={`tni tni-${node.state}${lit ? ' tni-lit' : ''}${node.type === 'root' ? ' tni-root' : ''}`}
+        style={node.childIds.length > 0 ? { cursor: 'pointer' } : undefined}
+        onMouseEnter={() => onHover(nodeId)}
+        onMouseLeave={() => onHover(null)}
+        onClick={() => node.childIds.length > 0 && onFocus(nodeId)}
+        title={`${node.path || 'PI Root'} · ${node.queryCount} consulta(s)`}
+      >
+        <span className="tni-indent">{indent}</span>
+        <span className={`tni-icon tni-icon-${node.state}`}>{stateIcon}</span>
+        <span className="tni-name">{node.name}</span>
+        {node.state === 'querying' && <span className="tni-badge tni-badge-querying">▶ QUERYING</span>}
+        {node.state === 'done' && node.queryCount > 0 && (
+          <span className="tni-badge tni-badge-done">{toolShort[node.toolName] ?? '✓'}</span>
+        )}
+        {node.childIds.length > 0 && node.state !== 'querying' && <span className="tni-chevron">›</span>}
+      </div>
+      {node.childIds.map((cid, i) => (
+        <NodeTreeItem key={cid} nodeId={cid} nodes={nodes}
+          isLastStack={[...isLastStack, i === node.childIds.length - 1]}
+          relatedIds={relatedIds} onHover={onHover} onFocus={onFocus} />
+      ))}
+    </div>
+  )
+}
+
+// ─── PI Tree Panel ────────────────────────────────────────────────────────────
+function PiTreePanel({ nodes, tools, toolsOpen, onToggle }: {
+  nodes: Map<string, AFNode>; tools: ToolEvent[]
+  toolsOpen: boolean; onToggle: () => void
+}) {
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [focusedId, setFocusedId] = useState('__root__')
+  const evEndRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { evEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tools])
+
+  const focusedNode = nodes.get(focusedId) ?? nodes.get('__root__')
+  const relatedIds = hoveredId ? getRelatedIds(nodes, hoveredId) : new Set<string>()
+  const hasTree = nodes.size > 1
+  const queryingCount = [...nodes.values()].filter(n => n.state === 'querying').length
+
+  const breadcrumb: AFNode[] = []
+  let cur: AFNode | undefined = focusedNode
+  while (cur) { breadcrumb.unshift(cur); cur = cur.parentId ? nodes.get(cur.parentId) : undefined }
+
+  if (!toolsOpen) {
+    return (
+      <button className="tool-reopen-btn" onClick={onToggle} title="Mostrar PI AF Tree">
+        <span className="tool-reopen-arrow">◀</span>
+        {queryingCount > 0
+          ? <span className="tool-reopen-badge" style={{ background: 'var(--yellow)', color: '#000' }}>{queryingCount}</span>
+          : nodes.size > 1 && <span className="tool-reopen-badge">{nodes.size - 1}</span>
+        }
+      </button>
+    )
+  }
+
+  return (
+    <div className="tool-panel">
+      {/* Header */}
+      <div className="pi-hdr">
+        <span className="pi-hdr-logo">⬡</span>
+        <span className="pi-hdr-title">PI AF TREE</span>
+        <div className="pi-hdr-actions">
+          {focusedId !== '__root__' && (
+            <button className="pi-hdr-btn" onClick={() =>
+              setFocusedId(nodes.get(focusedId)?.parentId ?? '__root__')
+            } title="Subir nivel">↑</button>
+          )}
+          <button className="pi-hdr-btn" onClick={onToggle} title="Colapsar">▶</button>
+        </div>
+      </div>
+
+      {/* Breadcrumb */}
+      <div className="pi-crumb">
+        {breadcrumb.map((n, i) => (
+          <span key={n.id}>
+            {i > 0 && <span className="pi-crumb-sep"> › </span>}
+            <span
+              className={`pi-crumb-item${n.id === focusedNode?.id ? ' pi-crumb-active' : ''}`}
+              onClick={() => setFocusedId(n.id)}
+            >{n.name}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Tree */}
+      <div className="pi-tree-body">
+        {hasTree && focusedNode ? (
+          <NodeTreeItem
+            nodeId={focusedNode.id} nodes={nodes} isLastStack={[]}
+            relatedIds={relatedIds}
+            onHover={setHoveredId}
+            onFocus={id => { setFocusedId(id); setHoveredId(null) }}
+          />
+        ) : (
+          <div className="pi-empty">
+            <div className="pi-empty-icon">◌</div>
+            <div>Sin consultas activas</div>
+            <div>La IA navegará el árbol AF aquí</div>
+          </div>
+        )}
+      </div>
+
+      {/* Divider */}
+      <div className="pi-divider">── TOOL EVENTS ──</div>
+
+      {/* Events */}
+      <div className="pi-evlog">
+        {tools.slice(-8).map(ev => (
+          <div key={ev.id} className={`pi-ev pi-ev-${ev.type}`}>
+            <span className="pi-ev-icon">{ev.type === 'tool_call' ? '⚡' : '✓'}</span>
+            <span className="pi-ev-name">{ev.name.replace('pi_fetch_', '').replace('pi_', '').replace(/_/g, ' ')}</span>
+            <span className="pi-ev-ts">{ev.timestamp}</span>
+          </div>
+        ))}
+        <div ref={evEndRef} />
+      </div>
     </div>
   )
 }
@@ -304,7 +521,6 @@ export default function App() {
   })
 
   const chatEndRef  = useRef<HTMLDivElement>(null)
-  const toolEndRef  = useRef<HTMLDivElement>(null)
   const inputRef    = useRef<HTMLInputElement>(null)
 
   const [toolsOpen, setToolsOpen] = useState(true)
@@ -320,7 +536,7 @@ export default function App() {
 
   // ── Auto-scroll ────────────────────────────────────────────────────────────
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
-  useEffect(() => { toolEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tools])
+  const afNodes = useMemo(() => buildAfTree(tools), [tools])
 
   // ── Status polling ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -538,23 +754,12 @@ export default function App() {
         </div>
 
         {/* Tool Activity */}
-        {toolsOpen ? (
-          <div className="tool-panel">
-            <div className="tool-header" onClick={() => setToolsOpen(false)} style={{ cursor: 'pointer' }}>
-              <span>▼</span>
-              <span style={{ marginLeft: 6 }}>◈  TOOL ACTIVITY</span>
-            </div>
-            <div className="tool-log">
-              {tools.map(ev => <ToolRow key={ev.id} ev={ev} />)}
-              <div ref={toolEndRef} />
-            </div>
-          </div>
-        ) : (
-          <button className="tool-reopen-btn" onClick={() => setToolsOpen(true)} title="Mostrar Tool Activity">
-            <span className="tool-reopen-arrow">◀</span>
-            {tools.length > 0 && <span className="tool-reopen-badge">{tools.length}</span>}
-          </button>
-        )}
+        <PiTreePanel
+          nodes={afNodes}
+          tools={tools}
+          toolsOpen={toolsOpen}
+          onToggle={() => setToolsOpen(o => !o)}
+        />
       </div>
 
       {/* AI Pet + Input */}
