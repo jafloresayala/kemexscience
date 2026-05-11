@@ -490,46 +490,81 @@ function nodeDisplayLabel(node: AFNode): string {
 }
 
 function PiNodeGraph({
-  nodes, focusedId, onFocus, selectedId, onSelect,
+  nodes, focusedId, onFocus, onExpand, selectedId, onSelect,
 }: {
   nodes: Map<string, AFNode>
   focusedId: string
   onFocus: (id: string) => void
+  onExpand: (node: AFNode) => void
   selectedId: string | null
   onSelect: (node: AFNode) => void
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
 
   // ── Zoom / pan state ──────────────────────────────────────────────
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  // Refs let wheel/drag handlers read latest values without stale closures
+  const zoomRef = useRef(1)
+  const panRef = useRef({ x: 0, y: 0 })
   const dragging = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
   // Reset zoom+pan when focusedId changes
-  useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }) }, [focusedId])
+  useEffect(() => {
+    setZoom(1); setPan({ x: 0, y: 0 })
+    zoomRef.current = 1; panRef.current = { x: 0, y: 0 }
+  }, [focusedId])
 
+  // Zoom toward mouse cursor position
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
     const factor = e.deltaY < 0 ? 1.12 : 0.9
-    setZoom(z => Math.min(8, Math.max(0.15, z * factor)))
+    const oldZoom = zoomRef.current
+    const newZoom = Math.min(8, Math.max(0.15, oldZoom * factor))
+    // The <g> transform is translate(pan.x+170, pan.y+40) scale(zoom)
+    // Keep the SVG-space point under the cursor fixed after zoom:
+    const svgPtX = (mx - (panRef.current.x + 170)) / oldZoom
+    const svgPtY = (my - (panRef.current.y + 40)) / oldZoom
+    const newPan = {
+      x: mx - svgPtX * newZoom - 170,
+      y: my - svgPtY * newZoom - 40,
+    }
+    zoomRef.current = newZoom
+    panRef.current = newPan
+    setZoom(newZoom)
+    setPan(newPan)
   }, [])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0 && e.button !== 2) return
     e.preventDefault()
-    dragging.current = { startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
+    setIsDragging(true)
+    dragging.current = { startX: e.clientX, startY: e.clientY, panX: panRef.current.x, panY: panRef.current.y }
     const onMove = (me: MouseEvent) => {
       if (!dragging.current) return
-      setPan({
+      const newPan = {
         x: dragging.current.panX + (me.clientX - dragging.current.startX),
         y: dragging.current.panY + (me.clientY - dragging.current.startY),
-      })
+      }
+      panRef.current = newPan
+      setPan(newPan)
     }
-    const onUp = () => { dragging.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    const onUp = () => {
+      dragging.current = null
+      setIsDragging(false)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [pan])
+  }, [])
 
   const positions = useMemo(
     () => computeLayout(focusedId, nodes),
@@ -554,7 +589,7 @@ function PiNodeGraph({
   return (
     <svg
       ref={svgRef}
-      style={{ width: '100%', height: '100%', display: 'block', minHeight: 160, cursor: dragging.current ? 'grabbing' : 'grab' }}
+      style={{ width: '100%', height: '100%', display: 'block', minHeight: 160, cursor: isDragging ? 'grabbing' : 'grab' }}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onContextMenu={e => e.preventDefault()}
@@ -600,7 +635,8 @@ function PiNodeGraph({
         const querying = node.state === 'querying'
         const isRoot = node.type === 'root'
         const R = isRoot ? 24 : 19
-        const canDrill = node.childIds.length > 0
+        const canExpand = !node.loaded && !isRoot
+        const canDrill = node.loaded && node.childIds.length > 0
         const isSelected = id === selectedId
         const shortName = node.name.length > 13 ? node.name.slice(0, 12) + '…' : node.name
 
@@ -608,10 +644,14 @@ function PiNodeGraph({
           <g
             key={id}
             transform={`translate(${p.x},${p.y})`}
-            style={{ cursor: isRoot ? 'default' : 'pointer' }}
+            style={{ cursor: isRoot ? 'default' : (canExpand || canDrill) ? 'pointer' : 'default' }}
             onMouseEnter={() => setHoveredId(id)}
             onMouseLeave={() => setHoveredId(null)}
-            onClick={() => canDrill && onFocus(id)}
+            onClick={() => {
+              if (isRoot) return
+              if (canExpand) onExpand(node)
+              else if (canDrill) onFocus(id)
+            }}
           >
             {/* Expanding pulse ring for querying */}
             {querying && (
@@ -654,7 +694,13 @@ function PiNodeGraph({
               fill={lit ? '#00c8ff' : querying ? '#ffb700' : '#4a6880'}>
               {shortName}
             </text>
-            {/* Drill hint */}
+            {/* Expand / drill hint */}
+            {canExpand && (
+              <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
+                fill={lit ? 'rgba(255,183,0,0.8)' : 'rgba(255,183,0,0.35)'}>
+                + expandir
+              </text>
+            )}
             {canDrill && (
               <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
                 fill={lit ? 'rgba(0,200,255,0.65)' : 'rgba(0,200,255,0.22)'}>
@@ -786,6 +832,7 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
             nodes={nodes}
             focusedId={focusedId}
             onFocus={handleFocus}
+            onExpand={onExpandNode}
             selectedId={selectedId}
             onSelect={onSelect}
           />
