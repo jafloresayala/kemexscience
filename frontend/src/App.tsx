@@ -1544,7 +1544,9 @@ function ScanDataTable({ onClose }: { onClose: () => void }) {
             {(data?.filters.machines ?? []).map(m => <option key={m} value={m}>{m}</option>)}
           </select>
           <span className="dt-count">
-            {loading ? 'Cargando…' : `${data?.total_rows ?? 0} filas · pág ${data?.page ?? 1}/${data?.pages ?? 1}`}
+            {loading
+              ? <><span className="dt-spinner dt-spinner-sm" /> Cargando…</>
+              : `${data?.total_rows ?? 0} filas · pág ${data?.page ?? 1}/${data?.pages ?? 1}`}
           </span>
         </div>
 
@@ -1565,7 +1567,22 @@ function ScanDataTable({ onClose }: { onClose: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((r, i) => (
+              {loading && (
+                <tr><td colSpan={9} className="dt-loading-cell">
+                  <span className="dt-spinner" />
+                  <span className="dt-loading-msg">Cargando datos del escaneo…</span>
+                </td></tr>
+              )}
+              {!loading && visibleRows.length === 0 && data && (
+                <tr><td colSpan={9} className="dt-empty">Sin resultados para los filtros actuales</td></tr>
+              )}
+              {!loading && !data && (
+                <tr><td colSpan={9} className="dt-empty dt-empty-nofile">
+                  <span className="dt-empty-icon">⬡</span>
+                  <span>No hay ningún escaneo disponible.<br/>Ejecuta el Plant Health Scan primero.</span>
+                </td></tr>
+              )}
+              {!loading && visibleRows.map((r, i) => (
                 <tr key={i} className={`dt-row${r.status !== 'OK' && r.status !== 'NO_DATA' ? ' dt-row-anomaly' : r.status === 'NO_DATA' ? ' dt-row-nodata' : ''}`}>
                   <td className="dt-cell-dim">{r.line}</td>
                   <td>{r.machine}</td>
@@ -1582,9 +1599,6 @@ function ScanDataTable({ onClose }: { onClose: () => void }) {
                   <td className="dt-num">{r.stdev !== null ? r.stdev?.toFixed(4) : '—'}</td>
                 </tr>
               ))}
-              {visibleRows.length === 0 && !loading && (
-                <tr><td colSpan={9} className="dt-empty">Sin resultados para los filtros actuales</td></tr>
-              )}
             </tbody>
           </table>
         </div>

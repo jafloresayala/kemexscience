@@ -1366,6 +1366,62 @@ body {
   color: var(--dim);
   font-size: 11px;
 }
+.dt-empty-nofile {
+  padding: 48px 24px !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.dt-empty-icon {
+  font-size: 28px;
+  color: var(--border3);
+  display: block;
+  margin-bottom: 4px;
+  opacity: 0.5;
+}
+
+/* Loading row */
+.dt-loading-cell {
+  text-align: center;
+  padding: 48px 24px;
+}
+.dt-loading-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.dt-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Spinner keyframe */
+@keyframes dt-spin {
+  to { transform: rotate(360deg); }
+}
+.dt-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border3);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: dt-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.dt-spinner-sm {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+.dt-loading-msg {
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
 
 /* Pagination */
 .dt-pagination {
