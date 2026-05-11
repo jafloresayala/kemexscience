@@ -152,6 +152,18 @@ body {
   transition: background 0.15s;
 }
 .pi-resize-handle:hover { background: rgba(0,200,255,0.25); }
+
+/* Fullscreen PI AF Tree overlay */
+.tool-panel-fs {
+  position: fixed !important;
+  top: 0; left: 0; right: 0; bottom: 0;
+  width: 100vw !important;
+  height: 100vh;
+  z-index: 200;
+  border-radius: 0;
+  border-left: none;
+}
+
 .tool-reopen-btn {
   flex-shrink: 0;
   width: 22px;

@@ -219,6 +219,35 @@ def pi_children(path: str = "") -> dict:
         return {"path": path, "count": 0, "children": [], "error": str(exc)}
 
 
+@app.get("/api/pi/attributes")
+def pi_attributes(path: str) -> dict:
+    """
+    Devuelve los atributos (tags PI) de un elemento AF.
+    Usado por el explorador interactivo del PI AF Tree en el frontend.
+    """
+    try:
+        import json as _json
+        raw = backend.pi_fetch_element_attributes(path)
+        data = _json.loads(raw.replace("... [TRUNCADO]", ""))
+        attrs = data.get("attributes", [])
+        return {
+            "path": path,
+            "count": len(attrs),
+            "attributes": [
+                {
+                    "name": a.get("attribute_name", ""),
+                    "tagName": a.get("piPoint") or a.get("tag_name_for_pi_get_tag_values", ""),
+                    "path": a.get("path", ""),
+                    "uom": a.get("UOM", ""),
+                    "currentValue": a.get("current_value"),
+                }
+                for a in attrs
+            ],
+        }
+    except Exception as exc:
+        return {"path": path, "count": 0, "attributes": [], "error": str(exc)}
+
+
 @app.post("/api/cache/refresh")
 def cache_refresh() -> dict:
     """

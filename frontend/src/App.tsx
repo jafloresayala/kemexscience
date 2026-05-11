@@ -368,11 +368,13 @@ function HealthScanPanel({ scan, onClose }: { scan: ScanState; onClose: () => vo
 interface AFNode {
   id: string; name: string; path: string
   parentId: string | null; childIds: string[]
-  type: 'root' | 'element'
+  type: 'root' | 'element' | 'tag'
   state: 'idle' | 'querying' | 'done'
   toolName: string; queryCount: number; ts: string
   loaded: boolean
   collapsed: boolean
+  tagName?: string   // PI point name (only for type:'tag')
+  uom?: string       // unit of measure
 }
 
 function parseToolPath(preview: string): string | null {
@@ -485,6 +487,7 @@ function bezierEdge(x1: number, y1: number, x2: number, y2: number): string {
 
 // ─── PI Node Graph (SVG) ──────────────────────────────────────────────────────
 function nodeDisplayLabel(node: AFNode): string {
+  if (node.type === 'tag') return `⟡ ${node.name}${node.uom ? ' [' + node.uom + ']' : ''}`
   if (!node.path) return node.name
   const parts = node.path.replace(/\\/g, '/').split('/').filter(p => p.trim())
   const tail = parts.slice(-2)
@@ -492,13 +495,14 @@ function nodeDisplayLabel(node: AFNode): string {
 }
 
 function PiNodeGraph({
-  nodes, focusedId, onFocus, onExpand, onCollapse, selectedId, onSelect,
+  nodes, focusedId, onFocus, onExpand, onCollapse, onLoadTags, selectedId, onSelect,
 }: {
   nodes: Map<string, AFNode>
   focusedId: string
   onFocus: (id: string) => void
   onExpand: (node: AFNode) => void
   onCollapse: (node: AFNode) => void
+  onLoadTags: (node: AFNode) => void
   selectedId: string | null
   onSelect: (node: AFNode) => void
 }) {
@@ -582,6 +586,7 @@ function PiNodeGraph({
   if (positions.size === 0) return null
 
   const stateCol = (n: AFNode, lit: boolean) => {
+    if (n.type === 'tag')                 return lit ? '#d080ff' : '#7030a0'
     if (lit)                              return '#00c8ff'
     if (n.state === 'querying')           return '#ffb700'
     if (n.type === 'root')                return '#00c8ff'
@@ -635,13 +640,16 @@ function PiNodeGraph({
         const node = nodes.get(id)!
         const lit = relatedIds.has(id)
         const col = stateCol(node, lit)
+        const isTag = node.type === 'tag'
         const querying = node.state === 'querying'
         const isRoot = node.type === 'root'
-        const R = isRoot ? 24 : 19
-        const canExpand = !node.loaded && !isRoot
-        const canCollapse = node.loaded && node.childIds.length > 0 && !node.collapsed && !isRoot
-        const canUnCollapse = node.loaded && node.childIds.length > 0 && node.collapsed && !isRoot
-        const canDrill = node.loaded && node.childIds.length > 0 && !node.collapsed
+        const R = isRoot ? 24 : isTag ? 13 : 19
+        const canExpand = !node.loaded && !isRoot && !isTag
+        const canLoadTags = !isTag && !isRoot && node.loaded && node.type === 'element' &&
+          !querying && node.childIds.length === 0
+        const canCollapse = !isTag && node.loaded && node.childIds.length > 0 && !node.collapsed && !isRoot
+        const canUnCollapse = !isTag && node.loaded && node.childIds.length > 0 && node.collapsed && !isRoot
+        const canDrill = !isTag && node.loaded && node.childIds.length > 0 && !node.collapsed
         const isSelected = id === selectedId
         const shortName = node.name.length > 13 ? node.name.slice(0, 12) + '…' : node.name
 
@@ -649,12 +657,14 @@ function PiNodeGraph({
           <g
             key={id}
             transform={`translate(${p.x},${p.y})`}
-            style={{ cursor: isRoot ? 'default' : (canExpand || canDrill || canUnCollapse) ? 'pointer' : 'default' }}
+            style={{ cursor: (canExpand || canDrill || canUnCollapse || canLoadTags || isTag) ? 'pointer' : 'default' }}
             onMouseEnter={() => setHoveredId(id)}
             onMouseLeave={() => setHoveredId(null)}
             onClick={() => {
               if (isRoot) return
+              if (isTag) { onSelect(node); return }
               if (canExpand) onExpand(node)
+              else if (canLoadTags) onLoadTags(node)
               else if (canUnCollapse) onCollapse(node)
               else if (canDrill) onFocus(id)
             }}
@@ -670,45 +680,74 @@ function PiNodeGraph({
             </>)}
             {/* Selected ring */}
             {isSelected && (
-              <circle r={R + 12} fill="none" stroke="#00ff41" strokeWidth="1.2"
+              <circle r={R + 10} fill="none" stroke="#00ff41" strokeWidth="1.2"
                 strokeDasharray="4 3" opacity="0.8" />
             )}
-            {/* Glow halo when lit or querying */}
+            {/* Glow halo */}
             {(lit || querying) && (
               <circle r={R + 5}
-                fill={querying ? 'rgba(255,183,0,0.07)' : 'rgba(0,200,255,0.07)'}
-                stroke={querying ? 'rgba(255,183,0,0.35)' : 'rgba(0,200,255,0.35)'}
+                fill={querying ? 'rgba(255,183,0,0.07)' : isTag ? 'rgba(208,128,255,0.08)' : 'rgba(0,200,255,0.07)'}
+                stroke={querying ? 'rgba(255,183,0,0.35)' : isTag ? 'rgba(208,128,255,0.4)' : 'rgba(0,200,255,0.35)'}
                 strokeWidth="1"
                 filter={`url(#glow${querying ? 'Y' : 'C'})`}
               />
             )}
-            {/* Main circle */}
-            <circle
-              r={R}
-              fill={isRoot ? 'rgba(0,20,44,0.96)' : 'rgba(3,9,22,0.96)'}
-              stroke={col}
-              strokeWidth={lit || querying ? 2 : 1.2}
-              className={querying ? 'svg-node-querying' : ''}
-            />
-            {/* Inner decoration ring */}
-            <circle r={R - 5} fill="none" stroke={`${col}28`} strokeWidth="0.7" />
-            {/* State icon */}
-            <text textAnchor="middle" dominantBaseline="central"
-              fontSize={isRoot ? 13 : 10} fill={col} fontFamily="monospace"
-              className={querying ? 'svg-icon-querying' : ''}>
-              {isRoot ? '⬡' : querying ? '⬡' : node.state === 'done' && node.queryCount > 0 ? '◈' : '◦'}
-            </text>
+
+            {/* ── TAG node: diamond shape ── */}
+            {isTag ? (
+              <>
+                <rect
+                  x={-R} y={-R} width={R * 2} height={R * 2}
+                  transform="rotate(45)"
+                  fill="rgba(3,0,16,0.96)"
+                  stroke={col} strokeWidth={isSelected ? 2 : 1.2}
+                />
+                <text textAnchor="middle" dominantBaseline="central"
+                  fontSize="9" fill={col} fontFamily="monospace">◇</text>
+              </>
+            ) : (
+              <>
+                {/* Main circle */}
+                <circle
+                  r={R}
+                  fill={isRoot ? 'rgba(0,20,44,0.96)' : 'rgba(3,9,22,0.96)'}
+                  stroke={col}
+                  strokeWidth={lit || querying ? 2 : 1.2}
+                  className={querying ? 'svg-node-querying' : ''}
+                />
+                {/* Inner decoration ring */}
+                <circle r={R - 5} fill="none" stroke={`${col}28`} strokeWidth="0.7" />
+                {/* State icon */}
+                <text textAnchor="middle" dominantBaseline="central"
+                  fontSize={isRoot ? 13 : 10} fill={col} fontFamily="monospace"
+                  className={querying ? 'svg-icon-querying' : ''}>
+                  {isRoot ? '⬡' : querying ? '⬡' : node.state === 'done' && node.queryCount > 0 ? '◈' : '◦'}
+                </text>
+              </>
+            )}
+
             {/* Label */}
-            <text y={R + 13} textAnchor="middle" fontSize="8.5"
+            <text y={R + 13} textAnchor="middle" fontSize={isTag ? '7.5' : '8.5'}
               fontFamily="'JetBrains Mono', monospace" letterSpacing="0.02em"
-              fill={lit ? '#00c8ff' : querying ? '#ffb700' : '#4a6880'}>
+              fill={lit ? (isTag ? '#d080ff' : '#00c8ff') : querying ? '#ffb700' : isTag ? '#7030a0' : '#4a6880'}>
               {shortName}
             </text>
-            {/* Expand / drill / collapse hints */}
+            {/* Tag UOM */}
+            {isTag && node.uom && (
+              <text y={R + 23} textAnchor="middle" fontSize="6.5" fontFamily="monospace"
+                fill="rgba(208,128,255,0.5)">{node.uom}</text>
+            )}
+            {/* Hints */}
             {canExpand && (
               <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
                 fill={lit ? 'rgba(255,183,0,0.9)' : 'rgba(255,183,0,0.45)'}>
                 ＋ expandir
+              </text>
+            )}
+            {canLoadTags && (
+              <text y={R + 23} textAnchor="middle" fontSize="7.5" fontFamily="monospace"
+                fill={lit ? 'rgba(208,128,255,0.9)' : 'rgba(208,128,255,0.4)'}>
+                ◇ ver tags
               </text>
             )}
             {querying && (
@@ -729,7 +768,7 @@ function PiNodeGraph({
                 ＋ mostrar
               </text>
             )}
-            {/* Collapse button — shown on hover when node has loaded children */}
+            {/* Collapse button */}
             {hoveredId === id && canCollapse && (
               <g
                 transform={`translate(${R - 3},${R - 3})`}
@@ -742,7 +781,7 @@ function PiNodeGraph({
               </g>
             )}
             {/* Query count badge */}
-            {node.queryCount > 0 && !querying && (
+            {node.queryCount > 0 && !querying && !isTag && (
               <g transform={`translate(${R - 3},${-R + 3})`}>
                 <circle r="6" fill="#001510" stroke="#00ff41" strokeWidth="0.9" />
                 <text textAnchor="middle" dominantBaseline="central"
@@ -751,8 +790,8 @@ function PiNodeGraph({
                 </text>
               </g>
             )}
-            {/* Pin / select badge — visible on hover for non-root nodes */}
-            {hoveredId === id && !isRoot && (
+            {/* Pin / select badge for element nodes */}
+            {hoveredId === id && !isRoot && !isTag && (
               <g
                 transform={`translate(${-R + 3},${-R + 3})`}
                 style={{ cursor: 'pointer' }}
@@ -763,9 +802,16 @@ function PiNodeGraph({
                 <text textAnchor="middle" dominantBaseline="central"
                   fontSize="10" fill={isSelected ? '#00ff41' : '#00c8ff'}
                   fontFamily="monospace">
-                  {isSelected ? '\u2212' : '+'}
+                  {isSelected ? '−' : '+'}
                 </text>
               </g>
+            )}
+            {/* Tag select hint on hover */}
+            {hoveredId === id && isTag && (
+              <text y={R + 33} textAnchor="middle" fontSize="7" fontFamily="monospace"
+                fill={isSelected ? '#00ff41' : 'rgba(208,128,255,0.7)'}>
+                {isSelected ? '× deseleccionar' : '+ contexto IA'}
+              </text>
             )}
           </g>
         )
@@ -776,17 +822,27 @@ function PiNodeGraph({
 }
 
 // ─── PI Tree Panel ────────────────────────────────────────────────────────────
-function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, onExpandNode, onCollapseNode }: {
+function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, onExpandNode, onCollapseNode, onLoadTags }: {
   nodes: Map<string, AFNode>; tools: ToolEvent[]
   toolsOpen: boolean; onToggle: () => void
   selectedId: string | null; onSelect: (node: AFNode) => void
   onExpandNode: (node: AFNode) => void
   onCollapseNode: (node: AFNode) => void
+  onLoadTags: (node: AFNode) => void
 }) {
   const [focusedId, setFocusedId] = useState('__root__')
+  const [fsTree, setFsTree] = useState(false)
   const evEndRef = useRef<HTMLDivElement>(null)
   useEffect(() => { evEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tools])
   useEffect(() => { if (!nodes.has(focusedId)) setFocusedId('__root__') }, [nodes, focusedId])
+
+  // Close fullscreen on Escape
+  useEffect(() => {
+    if (!fsTree) return
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setFsTree(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fsTree])
 
   const handleFocus = useCallback((id: string) => {
     setFocusedId(id)
@@ -830,9 +886,9 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
   }
 
   return (
-    <div className="tool-panel" ref={panelRef}>
-      {/* Resize handle */}
-      <div className="pi-resize-handle" onMouseDown={startResize} title="Arrastrar para redimensionar" />
+    <div className={`tool-panel${fsTree ? ' tool-panel-fs' : ''}`} ref={panelRef}>
+      {/* Resize handle (hidden in fullscreen) */}
+      {!fsTree && <div className="pi-resize-handle" onMouseDown={startResize} title="Arrastrar para redimensionar" />}
       {/* Header */}
       <div className="pi-hdr">
         <span className="pi-hdr-logo">⬡</span>
@@ -843,7 +899,11 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
               handleFocus(nodes.get(focusedId)?.parentId ?? '__root__')
             } title="Subir nivel">↑</button>
           )}
-          <button className="pi-hdr-btn" onClick={onToggle} title="Colapsar">▶</button>
+          <button className="pi-hdr-btn" onClick={() => setFsTree(f => !f)}
+            title={fsTree ? 'Salir de pantalla completa (Esc)' : 'Pantalla completa'}>
+            {fsTree ? '⊡' : '⊞'}
+          </button>
+          {!fsTree && <button className="pi-hdr-btn" onClick={onToggle} title="Colapsar">▶</button>}
         </div>
       </div>
 
@@ -869,14 +929,15 @@ function PiTreePanel({ nodes, tools, toolsOpen, onToggle, selectedId, onSelect, 
             onFocus={handleFocus}
             onExpand={onExpandNode}
             onCollapse={onCollapseNode}
+            onLoadTags={onLoadTags}
             selectedId={selectedId}
             onSelect={onSelect}
           />
         ) : (
           <div className="pi-empty">
             <div className="pi-empty-icon">◌</div>
-            <div>Sin consultas activas</div>
-            <div>La IA navegará el árbol AF aquí</div>
+            <div>Cargando árbol PI…</div>
+            <div>Haz click en un nodo para explorar</div>
           </div>
         )}
       </div>
@@ -1334,6 +1395,90 @@ export default function App() {
     })
   }, [])
 
+  // Load PI attribute tags for a leaf element node
+  const loadTags = useCallback(async (node: AFNode) => {
+    if (node.type !== 'element') return
+    // Mark as querying
+    setExplorerNodes(prev => {
+      const next = new Map(prev)
+      const n = next.get(node.id) ?? node
+      next.set(node.id, { ...n, state: 'querying' })
+      return next
+    })
+    try {
+      const res = await fetch(`/api/pi/attributes?path=${encodeURIComponent(node.path)}`)
+      const data = await res.json() as { attributes: { name: string; tagName: string; path: string; uom?: string }[] }
+      setExplorerNodes(prev => {
+        const next = new Map(prev)
+        const parentId = node.id
+        const newChildIds: string[] = []
+        for (const attr of data.attributes) {
+          const nid = `tag:${parentId}/${attr.name}`
+          if (!next.has(nid)) {
+            next.set(nid, {
+              id: nid, name: attr.name, path: attr.path || node.path,
+              parentId, childIds: [], type: 'tag',
+              state: 'done', toolName: '', queryCount: 0, ts: '',
+              loaded: true, collapsed: false,
+              tagName: attr.tagName, uom: attr.uom,
+            } as AFNode)
+          }
+          if (!newChildIds.includes(nid)) newChildIds.push(nid)
+        }
+        const parent = next.get(parentId) ?? node
+        const merged = [...new Set([...parent.childIds, ...newChildIds])]
+        next.set(parentId, { ...parent, childIds: merged, loaded: true, state: 'done' })
+        return next
+      })
+    } catch {
+      setExplorerNodes(prev => {
+        const next = new Map(prev)
+        const n = next.get(node.id) ?? node
+        next.set(node.id, { ...n, state: 'done' })
+        return next
+      })
+    }
+  }, [])
+
+  // Bootstrap: auto-load root children on mount so tree is browseable from start
+  useEffect(() => {
+    const boot = async () => {
+      try {
+        const res = await fetch('/api/pi/children?path=')
+        const data = await res.json() as { children: { name: string; path: string }[] }
+        setExplorerNodes(prev => {
+          const next = new Map(prev)
+          const newChildIds: string[] = []
+          for (const ch of data.children) {
+            const segs = ch.path.replace(/\\/g, '/').split('/').filter(Boolean)
+            const nid = `n:${segs.join('/')}`
+            if (!next.has(nid)) {
+              next.set(nid, {
+                id: nid, name: ch.name, path: ch.path,
+                parentId: '__root__', childIds: [], type: 'element',
+                state: 'idle', toolName: '', queryCount: 0, ts: '',
+                loaded: false, collapsed: false,
+              } as AFNode)
+            }
+            if (!newChildIds.includes(nid)) newChildIds.push(nid)
+          }
+          // Create or update __root__ in explorerNodes with these childIds
+          const root = next.get('__root__') ?? {
+            id: '__root__', name: 'PI ROOT', path: '',
+            parentId: null, childIds: [], type: 'root' as const,
+            state: 'done' as const, toolName: '', queryCount: 0, ts: '',
+            loaded: true, collapsed: false,
+          }
+          next.set('__root__', { ...root, childIds: [...new Set([...root.childIds, ...newChildIds])] })
+          return next
+        })
+      } catch { /* server may not be ready yet; AI will populate tree */ }
+    }
+    // Small delay to let server initialize
+    const t = setTimeout(boot, 1500)
+    return () => clearTimeout(t)
+  }, [])
+
   // ── Status polling ─────────────────────────────────────────────────────────
   useEffect(() => {
     let prevReady = false
@@ -1408,7 +1553,9 @@ export default function App() {
     const agentId = uid()
     const agentTs = now()
     const messageToSend = ctxNode
-      ? `[Nodo seleccionado en PI AF Tree: "${ctxNode.name}" \u2014 Ruta completa: ${ctxNode.path}]\n\n${text}`
+      ? ctxNode.type === 'tag'
+        ? `[Tag PI seleccionado: "${ctxNode.name}" — Tag name: ${ctxNode.tagName ?? ctxNode.name}${ctxNode.uom ? ' — UOM: ' + ctxNode.uom : ''} — Ruta: ${ctxNode.path}]\n\n${text}`
+        : `[Nodo seleccionado en PI AF Tree: "${ctxNode.name}" — Ruta completa: ${ctxNode.path}]\n\n${text}`
       : text
 
     try {
@@ -1701,6 +1848,7 @@ export default function App() {
           onSelect={n => setCtxNode(prev => prev?.id === n.id ? null : n)}
           onExpandNode={loadChildren}
           onCollapseNode={collapseNode}
+          onLoadTags={loadTags}
         />
       </div>
 
