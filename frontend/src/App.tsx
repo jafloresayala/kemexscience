@@ -1306,7 +1306,10 @@ export default function App() {
   }, [scanState.phase])
 
   // ── Cache refresh (elimina archivos health_scan_*.json) ──────────────────
+  const [cleaning, setCleaning] = useState(false)
+
   const refreshCache = async () => {
+    if (cleaning) return
     const countMatch = status.cacheInfo.match(/^(\d+)/)
     const scanCount = countMatch ? parseInt(countMatch[1]) : 0
     const confirmMsg = scanCount > 0
@@ -1314,6 +1317,7 @@ export default function App() {
       : '¿Limpiar archivos de escaneo guardados?'
     if (!window.confirm(confirmMsg)) return
 
+    setCleaning(true)
     try {
       const res = await fetch('/api/cache/refresh', { method: 'POST' })
       const data = await res.json() as { deleted: number; errors: string[] }
@@ -1326,6 +1330,8 @@ export default function App() {
       setScanState(s => ({ ...s, phase: 'idle', summary: null }))
     } catch {
       setStatus(s => ({ ...s, cacheInfo: 'error al eliminar' }))
+    } finally {
+      setCleaning(false)
     }
   }
 
@@ -1383,7 +1389,13 @@ export default function App() {
         <button className="theme-btn" onClick={() => setLightMode(l => !l)} title="Cambiar tema">
           {lightMode ? '◑ DARK' : '○ LIGHT'}
         </button>
-        <button className="cache-btn" onClick={refreshCache} title="Eliminar archivos de escaneo guardados (health_scan_*.json)">🗑 LIMPIAR</button>
+        <button
+          className={`cache-btn${cleaning ? ' cache-btn-cleaning' : ''}`}
+          onClick={refreshCache}
+          disabled={cleaning}
+          title="Eliminar archivos de escaneo guardados (health_scan_*.json)">
+          {cleaning ? '⟳ LIMPIANDO…' : '🗑 LIMPIAR'}
+        </button>
       </div>
 
       {/* Main split */}
