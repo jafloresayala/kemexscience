@@ -242,39 +242,40 @@ function MessageBubble({
 }) {
   const lastCode = msg.role === 'agent' ? extractLastCode(msg.content) : null
 
+  const avatarEmoji = msg.role === 'user' ? '👤' : msg.role === 'agent' ? '🤖' : msg.role === 'error' ? '⚠' : '•'
+  const roleName    = msg.role === 'user' ? 'Tú' : msg.role === 'agent' ? 'Agente PI' : msg.role === 'error' ? 'Error' : 'Sistema'
+
   return (
     <div className={`message message-${msg.role}`}>
-      <div className="message-header">
-        <span className="message-ts">[{msg.timestamp}]</span>
-        <span className={`message-role role-${msg.role}`}>
-          {msg.role === 'user'   ? 'TÚ  ▶'
-           : msg.role === 'agent' ? 'AGENTE  ◀'
-           : msg.role === 'error' ? '✖ ERROR'
-           : '◈ SISTEMA'}
-        </span>
-      </div>
-      <div className="message-body">
-        <MessageBody content={msg.content} />
-        {msg.plotUrl && (
-          <div className="plot-container">
-            <img
-              src={msg.plotUrl}
-              alt="Gráfica generada"
-              className="plot-img"
-              onClick={() => onZoom?.(msg.plotUrl!)}
-              title="Click para ampliar"
-            />
-            <div className="plot-actions">
-              <button className="plot-btn" onClick={() => onZoom?.(msg.plotUrl!)}>⤢ AMPLIAR</button>
+      <div className={`message-avatar avatar-${msg.role}`}>{avatarEmoji}</div>
+      <div className="message-inner">
+        <div className="message-header">
+          <span className={`message-role role-${msg.role}`}>{roleName}</span>
+          <span className="message-ts">{msg.timestamp}</span>
+        </div>
+        <div className="message-body">
+          <MessageBody content={msg.content} />
+          {msg.plotUrl && (
+            <div className="plot-container">
+              <img
+                src={msg.plotUrl}
+                alt="Gráfica generada"
+                className="plot-img"
+                onClick={() => onZoom?.(msg.plotUrl!)}
+                title="Click para ampliar"
+              />
+              <div className="plot-actions">
+                <button className="plot-btn" onClick={() => onZoom?.(msg.plotUrl!)}>⤢ Ampliar</button>
+              </div>
             </div>
-          </div>
+          )}
+        </div>
+        {lastCode && onExecute && (
+          <button className="exec-btn" onClick={() => onExecute(lastCode)}>
+            ▶ Ejecutar código Python
+          </button>
         )}
       </div>
-      {lastCode && onExecute && (
-        <button className="exec-btn" onClick={() => onExecute(lastCode)}>
-          ▶ Ejecutar código Python
-        </button>
-      )}
     </div>
   )
 }
@@ -2350,7 +2351,7 @@ export default function App() {
         )}
         {/* Input */}
         <div className="input-row">
-          <span className="prompt-glyph">❯</span>
+          <span className="prompt-glyph">+</span>
         <input
           ref={inputRef}
           className="user-input"
